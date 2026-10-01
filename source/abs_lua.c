@@ -79,7 +79,7 @@ static const char *(*p_tolstring)(lua_State *L, int idx, size_t *len);
 /* ------------------------------------------------ the math wrappers */
 static void tick(lua_State *L);
 
-#define HOOKS(X) X(floor) X(min) X(max) X(abs) X(sqrt) X(sin) X(cos) X(atan2)
+#define HOOKS(X) X(floor) X(min) X(max) X(sqrt) X(sin) X(cos) X(atan2)
 #define DEF(n)                                                                   \
   static lua_CFunction o_##n;                                                    \
   static int h_##n(lua_State *L) {                                               \
