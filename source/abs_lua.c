@@ -371,6 +371,8 @@ static void tick(lua_State *L) {
   u->done = want;
   int top = p_gettop(L);
   if (!u->loaded) {
+    debugPrintf("[lua] loading abs_ctl.lua (%u bytes) into universe %p...\n",
+                (unsigned)abs_ctl_lua_size, u->G);
     if (p_loadbuffer(L, abs_ctl_lua, abs_ctl_lua_size, "=abs_ctl") != 0 || p_pcall(L, 0, 0, 0) != 0) {
       lua_error(L, "the controller script did not load");
       g_failed = 1;
@@ -378,6 +380,7 @@ static void tick(lua_State *L) {
       g_busy = 0;
       return;
     }
+    debugPrintf("[lua] abs_ctl.lua loaded successfully into universe %p!\n", u->G);
     u->loaded = 1;
     p_settop(L, top);
 
@@ -427,17 +430,19 @@ static void tick(lua_State *L) {
 
 /* ------------------------------------------------ installing */
 void abs_lua_install(void) {
+  debugPrintf("[lua] abs_lua_install starting...\n");
   if (!dcr_config()->lua_bridge) {
     debugPrintf("[lua] the controller bridge is off (config.ini [debug] lua_bridge)\n");
     return;
   }
   const uintptr_t base = (uintptr_t)g_mod_game.load_virtbase;
+  debugPrintf("[lua] module base: %p\n", (void *)base);
   for (int i = 0; i < F_COUNT; i++) {
     const uint32_t *w = (const uint32_t *)(base + k_fn[i].off);
     if (w[0] != k_fn[i].w0 || w[1] != k_fn[i].w1) {
-      debugPrintf("[lua] %s is not where 2.2.14 has it (%08lx %08lx): the controller bridge is off; "
-                  "touch and the pointer still work\n",
-                  k_fn[i].name, (unsigned long)w[0], (unsigned long)w[1]);
+      debugPrintf("[lua] %s is not where SW2 has it (got %08lx %08lx, expected %08lx %08lx): bridge off\n",
+                  k_fn[i].name, (unsigned long)w[0], (unsigned long)w[1],
+                  (unsigned long)k_fn[i].w0, (unsigned long)k_fn[i].w1);
       return;
     }
   }
@@ -452,10 +457,14 @@ void abs_lua_install(void) {
     const char *name;
     lua_CFunction func;
   } *reg = (void *)(base + MATHLIB_REG);
+  debugPrintf("[lua] mathlib table at %p\n", reg);
   int n = 0;
   for (int i = 0; i < MATHLIB_N; i++) {
+    debugPrintf("[lua]   entry %d: name=%p (%s)\n", i, reg[i].name,
+                (reg[i].name && (uintptr_t)reg[i].name >= base && (uintptr_t)reg[i].name < base + g_mod_game.load_size)
+                    ? reg[i].name : "invalid");
     if (!reg[i].name || (uintptr_t)reg[i].name < base || (uintptr_t)reg[i].name >= base + g_mod_game.load_size) {
-      debugPrintf("[lua] the math library table is not where 2.2.14 has it: the bridge is off\n");
+      debugPrintf("[lua] math table invalid at entry %d: bridge off\n", i);
       return;
     }
     for (unsigned k = 0; k < sizeof k_hooks / sizeof k_hooks[0]; k++)
@@ -465,8 +474,9 @@ void abs_lua_install(void) {
         n++;
       }
   }
+  debugPrintf("[lua] math hooks matched: %d of %zu\n", n, sizeof k_hooks / sizeof k_hooks[0]);
   if (n != (int)(sizeof k_hooks / sizeof k_hooks[0])) {
-    debugPrintf("[lua] only %d of the math functions found: the bridge is off\n", n);
+    debugPrintf("[lua] only %d math functions matched: bridge off\n", n);
     for (int i = 0; i < MATHLIB_N; i++)
       for (unsigned k = 0; k < sizeof k_hooks / sizeof k_hooks[0]; k++)
         if (reg[i].func == k_hooks[k].hook)
