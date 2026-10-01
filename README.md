@@ -4,7 +4,7 @@
 
 # abstarwars2_nx
 
-**Angry Birds Star Wars II on Nintendo Switch**
+**Angry Birds Star Wars II for Nintendo Switch**
 
 An unofficial Nintendo Switch native wrapper for the 32-bit Android release of  
 **Angry Birds Star Wars II**.
@@ -46,8 +46,8 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 ### For Players
 - A Nintendo Switch running **Atmosphère** custom firmware.
 - The [Sphaira](https://github.com/ITotalJustice/sphaira) homebrew menu (recommended for installing the forwarder).
-- A copy of **Angry Birds Star Wars II v1.9.25** APK (`com.rovio.angrybirdsstarwarsii.ads`, armeabi-v7a).
-- The archived `data/files/` asset pack (required because Rovio's original online download servers were discontinued).
+- A copy of **Angry Birds Star Wars II.apk** (v1.9.25, no modified)
+- The folder `data/files/` known as just the "assets" (required because Rovio's original online download servers were discontinued and the apk does not contain the assets).
 
 ---
 
@@ -55,15 +55,14 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 
 1. Download the latest release from the [Releases](#) tab:
    - `abstarwars2_nx.nro`
-   - `abstarwars2_data.zip` (asset pack)
 2. On your Switch SD card, create the following directory:
    ```text
    sdmc:/switch/abstarwars2/
    ```
-3. Place your APK and the release files inside that folder:
+3. Place your APK and your assets files inside that folder:
    - Copy `abstarwars2_nx.nro` into `sdmc:/switch/abstarwars2/`.
-   - Copy your `angry-birds-star-wars-ii-1-9-25.apk` into `sdmc:/switch/abstarwars2/`.
-   - Extract `abstarwars2_data.zip` so that the `data/` directory is in `sdmc:/switch/abstarwars2/data/`.
+   - Copy your `angry-birds-star-wars-ii-1-9-25.apk` into `sdmc:/switch/abstarwars2/` (the name of the apk does not matter).
+   - Paste your `data/files` directory into `sdmc:/switch/abstarwars2/`.
 4. The final folder structure on your SD card must look like:
    ```text
    sdmc:/switch/abstarwars2/
@@ -145,7 +144,7 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 ## Credits & Acknowledgments
 
 - **Rovio Entertainment & Lucasfilm**: Original creators of Angry Birds Star Wars II.
-- **[aks796](https://github.com/aks796)**: For the groundbreaking [`android32`](https://github.com/aks796/android32) runtime, [`libnx32`](https://github.com/aks796/libnx32), [`mesa32`](https://github.com/aks796/mesa32), and the [`abspace_nx`](https://github.com/aks796/abspace_nx) reference port.
+- **[aks796](https://github.com/aks796)**: For the groundbreaking [`android32`](https://github.com/aks796/android32) runtime, [`libnx32`](https://github.com/aks796/libnx32), [`mesa32`](https://github.com/aks796/mesa32), and the [`abspace_nx`](https://github.com/aks796/abspace_nx) reference port
 - **Andy Nguyen (TheOfficialFloW) & fgsfds**: Dynamic `.so` loader implementations.
 - **xerpi**: For `vita2hos`, pioneer of AArch32 native execution on Switch.
 - **Switchbrew**: For `libnx` and tools.

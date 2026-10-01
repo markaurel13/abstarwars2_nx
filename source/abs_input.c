@@ -825,8 +825,13 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     focus_set(st, cur);
   else {
     cur = best_item(st);
-    if (cur < 0)
+    if (cur < 0) {
+      /* If no button is on screen (e.g. comic cutscene / splash screen animating),
+       * pressing A or B taps the screen so the cutscene advances or fast-forwards. */
+      if (down & (k_a | k_b))
+        syn_tap((float)abs_surface_w() * 0.5f, (float)abs_surface_h() * 0.5f);
       return;
+    }
     focus_set(st, cur);
   }
   /* until the player moves it, the focus goes to a better first choice when

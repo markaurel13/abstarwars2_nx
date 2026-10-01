@@ -1118,15 +1118,27 @@ local pending_buys = {}
 
 local function free_purchases()
   local P = type(iap) == 'table' and iap.Payment
-  if type(P) ~= 'table' or P.__abs_free then return end
-  P.__abs_free = true
-  P.buyProduct = function(id)
-    pending_buys[#pending_buys + 1] = id
+  if type(P) == 'table' and not P.__abs_free then
+    P.__abs_free = true
+    P.buyProduct = function(id)
+      pending_buys[#pending_buys + 1] = id
+    end
+    P.getPrice = function() return 'FREE' end
+    P.isInitialized = function() return true end
+    P.requireLogin = function(ok)
+      if type(ok) == 'function' then ok() end
+    end
   end
-  P.getPrice = function() return 'FREE' end
-  P.isInitialized = function() return true end
-  P.requireLogin = function(ok)
-    if type(ok) == 'function' then ok() end
+  if type(iap) == 'table' and not iap.__abs_free then
+    iap.__abs_free = true
+    if type(iap.buyProduct) == 'function' then
+      iap.buyProduct = function(id)
+        pending_buys[#pending_buys + 1] = id
+      end
+    end
+    if type(iap.getPrice) == 'function' then
+      iap.getPrice = function() return 'FREE' end
+    end
   end
 end
 
@@ -1138,6 +1150,10 @@ local function grant_pending()
   for _, id in ipairs(list) do
     if CP and type(CP.onProductPurchased) == 'function' then
       pcall(CP.onProductPurchased, id)
+    end
+    if type(eventManager) == 'table' and type(eventManager.notify) == 'function' then
+      local eid = (type(events) == 'table' and events.EID_IAP_PURCHASE_COMPLETED) or 'EID_IAP_PURCHASE_COMPLETED'
+      pcall(eventManager.notify, eventManager, { id = eid, productId = id })
     end
   end
 end
