@@ -66,7 +66,7 @@ static const Fn k_fn[F_COUNT] = {
     [F_SETTOP] = {"lua_settop", 0x4a9e0c, 0xe3510000, 0xba00000b},
     [F_TOLSTRING] = {"lua_tolstring", 0x4ab4e4, 0xe92d4070, 0xe2515000},
 };
-#define MATHLIB_REG 0x7cffd8 /* static const luaL_Reg mathlib[] (lmathlib.c) */
+#define MATHLIB_REG 0x7d0fd8 /* static const luaL_Reg mathlib[] (lmathlib.c) */
 #define MATHLIB_N 26
 
 
