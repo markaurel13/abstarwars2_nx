@@ -60,14 +60,15 @@ typedef struct {
 
 enum { F_LOADBUFFER, F_PCALL, F_GETTOP, F_SETTOP, F_TOLSTRING, F_COUNT };
 static const Fn k_fn[F_COUNT] = {
-    [F_LOADBUFFER] = {"luaL_loadbuffer", 0x3f2c28, 0xe52de004, 0xe24dd00c},
-    [F_PCALL] = {"lua_pcall", 0x3ffe94, 0xe3530000, 0xe92d4030},
-    [F_GETTOP] = {"lua_gettop", 0x3fc8a8, 0xe5902008, 0xe590300c},
-    [F_SETTOP] = {"lua_settop", 0x3fc8bc, 0xe3510000, 0xba00000b},
-    [F_TOLSTRING] = {"lua_tolstring", 0x3fdf94, 0xe92d4070, 0xe2515000},
+    [F_LOADBUFFER] = {"luaL_loadbuffer", 0x4a017c, 0xe52de004, 0xe24dd00c},
+    [F_PCALL] = {"lua_pcall", 0x4ad3e4, 0xe3530000, 0xe92d4030},
+    [F_GETTOP] = {"lua_gettop", 0x4a9df8, 0xe5902008, 0xe590300c},
+    [F_SETTOP] = {"lua_settop", 0x4a9e0c, 0xe3510000, 0xba00000b},
+    [F_TOLSTRING] = {"lua_tolstring", 0x4ab4e4, 0xe92d4070, 0xe2515000},
 };
-#define MATHLIB_REG 0x6ea650 /* static const luaL_Reg mathlib[] (lmathlib.c) */
-#define MATHLIB_N 28
+#define MATHLIB_REG 0x7cffd8 /* static const luaL_Reg mathlib[] (lmathlib.c) */
+#define MATHLIB_N 26
+
 
 static int (*p_loadbuffer)(lua_State *L, const char *buf, size_t sz, const char *name);
 static int (*p_pcall)(lua_State *L, int nargs, int nresults, int errfunc);
