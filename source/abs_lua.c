@@ -418,8 +418,12 @@ static void tick(lua_State *L) {
                      abs_video_state(), g_focus_id, u->is_game ? (double)g_pany : 0.0);
   if (p_loadbuffer(L, chunk, (size_t)len, "=abs_frame") == 0 && p_pcall(L, 0, 1, 0) == 0) {
     const char *s = p_tolstring(L, -1, NULL);
-    if (s)
+    if (s) {
+      static int logged;
+      if (logged++ < 10)
+        debugPrintf("[lua] frame output: %.120s\n", s);
       parse(s, u);
+    }
   } else {
     lua_error(L, "__abs.frame failed");
   }

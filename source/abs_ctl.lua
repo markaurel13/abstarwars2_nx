@@ -33,6 +33,17 @@
 local A = {}
 __abs = A
 
+do
+  local g_list = {}
+  for k, v in pairs(_G) do
+    if k ~= '_G' and k ~= '_VERSION' and k ~= 'string' and k ~= 'table' and k ~= 'math' and k ~= 'coroutine' and k ~= 'package' and k ~= 'os' and k ~= 'io' and k ~= 'debug' then
+      g_list[#g_list + 1] = k .. ':' .. type(v)
+    end
+  end
+  table.sort(g_list)
+  print('[LUA_GLOBALS] ' .. table.concat(g_list, ' '))
+end
+
 local type, pcall, tostring, tonumber, pairs, ipairs = type, pcall, tostring, tonumber, pairs, ipairs
 local sfind, slower, sfmt, ssub = string.find, string.lower, string.format, string.sub
 local concat = table.concat
@@ -90,14 +101,22 @@ local popup_open
 -- child first, skipping children that are not visible and active, and stops
 -- at the first that answers.
 local function menu_manager()
-  if type(GameSystem) ~= 'table' or type(GameSystem.menuManager) ~= 'table' then return nil end
-  return GameSystem.menuManager
+  if type(menuManager) == 'table' then return menuManager end
+  if type(MenuManager) == 'table' then return MenuManager end
+  if type(g_menuManager) == 'table' then return g_menuManager end
+  if type(GameSystem) == 'table' and type(GameSystem.menuManager) == 'table' then return GameSystem.menuManager end
+  return nil
 end
 
 local function base_frame()
+  if type(rootFrame) == 'table' then return rootFrame end
+  if type(g_rootFrame) == 'table' then return g_rootFrame end
+  if type(baseFrame) == 'table' then return baseFrame end
+  if type(g_baseFrame) == 'table' then return g_baseFrame end
   local mm = menu_manager()
   if not mm then return nil end
   if type(mm._baseFrame) == 'table' then return mm._baseFrame end
+  if type(mm.rootFrame) == 'table' then return mm.rootFrame end
   if type(mm.getRoot) == 'function' then
     local ok, r = pcall(mm.getRoot, mm)
     if ok and type(r) == 'table' then return r end
@@ -1831,9 +1850,9 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local fbx, fby -- the flying bird, where its aimed power's cursor starts
   local tx, ty = -1, -1
   local sw, sh = screen_w(), screen_h()
-  local game = (type(GameSystem) == 'table') and 1 or 0
+  local game = 1
 
-  if game == 1 then housekeeping(flags, memlimit) end
+  housekeeping(flags, memlimit)
 
   local ingame = call(isInGameMode) and type(objects) == 'table' and level_on_top()
   if ingame then
