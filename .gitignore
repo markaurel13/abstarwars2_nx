@@ -1,0 +1,31 @@
+# Build outputs
+/build/
+/launcher/build/
+/launcher/romfs/
+*.elf
+*.nsp
+*.nro
+*.nacp
+*.npdm
+*.nso
+*.build
+*.zip
+
+# Local portlibs and libraries (prebuilt/external)
+/portlibs32/
+/libnx32/
+
+# Reference repository
+/ref_abspace/
+
+# Local game files and assets (never commit copyrighted files)
+*.apk
+*.so
+/sd/
+/data/
+/debug/
+
+# OS artifacts
+.DS_Store
+*.swp
+*~
