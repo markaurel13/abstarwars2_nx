@@ -54,7 +54,7 @@ local MAX_LENGTH = 5.4
 local MODE_MENU, MODE_AIM, MODE_FLIGHT, MODE_WAIT, MODE_PAUSED, MODE_ENDED = 1, 2, 3, 4, 5, 6
 local AIMED_POWERS = {LASER = true, GRENADE = true, GRAVITY_DISRUPTOR = true} -- aimed where tapped
 local CMD_SLING, CMD_CASTLE, CMD_PAUSE, CMD_RESTART, CMD_EAGLE, CMD_PAGE_NEXT, CMD_PAGE_PREV,
-      CMD_SPIN_LEFT, CMD_SPIN_RIGHT, CMD_POWERUPS = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+      CMD_SPIN_LEFT, CMD_SPIN_RIGHT, CMD_POWERUPS, CMD_EPISODE_LIGHT, CMD_EPISODE_DARK = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
 local FLAG_BUTTONS, FLAG_FREE, FLAG_INFO, FLAG_ONLINE, FLAG_KELLOGGS = 1, 2, 4, 8, 16
 local KIND_BUTTON, KIND_SIDE, KIND_CENTRE, KIND_LINK = 0, 1, 2, 3
 
@@ -70,21 +70,87 @@ local function call(f, a, b)
   return nil
 end
 
+local function link_gamelua()
+  if _G.__abs_gamelua then return end
+  local g = rawget(_G, 'gamelua')
+  if type(g) == 'table' then
+    _G.__abs_gamelua = g
+  elseif not _G.__abs_gamelua then
+    for i = 2, 7 do
+      local ok, f = pcall(getfenv, i)
+      if ok and type(f) == 'table' and (f.menuManager or f.g_inMainMenu or f.levelName) then
+        _G.__abs_gamelua = f
+        print("[lua] found game environment in call stack at level " .. i .. "!")
+        local s = "[GAMELUA_GLOBALS] "
+        for k, v in pairs(_G.__abs_gamelua) do 
+          s = s .. tostring(k) .. ":" .. type(v) .. " " 
+          if #s > 500 then
+            print(s)
+            s = "[GAMELUA_GLOBALS] "
+          end
+        end
+        if #s > 20 then print(s) end
+
+        if type(f.menuManager) == 'table' then
+          local sm = "[MENUMANAGER_KEYS] "
+          for k, v in pairs(f.menuManager) do
+            sm = sm .. tostring(k) .. ":" .. type(v) .. " "
+            if #sm > 500 then print(sm); sm = "[MENUMANAGER_KEYS] " end
+          end
+          if #sm > 20 then print(sm) end
+        end
+
+        if type(f.MenuManager) == 'table' then
+          local sm = "[CAPITAL_MENUMANAGER_KEYS] "
+          for k, v in pairs(f.MenuManager) do
+            sm = sm .. tostring(k) .. ":" .. type(v) .. " "
+            if #sm > 500 then print(sm); sm = "[CAPITAL_MENUMANAGER_KEYS] " end
+          end
+          if #sm > 20 then print(sm) end
+        end
+        break
+      end
+    end
+  end
+
+  if not _G.__abs_gamelua and frame_no == 100 then
+    local s = "[LUA_GLOBALS_100] "
+    for k, v in pairs(_G) do s = s .. tostring(k) .. ":" .. type(v) .. " " end
+    print(s)
+  end
+
+  if _G.__abs_gamelua then
+    local env = _G.__abs_gamelua
+    setmetatable(_G, {
+      __index = env,
+      __newindex = function(t, k, v)
+        if type(rawget(_G, 'gamelua')) == 'table' then
+          rawget(_G, 'gamelua')[k] = v
+        else
+          env[k] = v
+        end
+        rawset(t, k, v)
+      end
+    })
+  end
+end
+
 local function screen_w()
-  local w = num(screenWidth)
+  local w = num(screenWidth) or (type(gamelua) == 'table' and num(gamelua.screenWidth))
   if w and w > 0 then return w end
-  return 1024
+  return 1280
 end
 
 local function screen_h()
-  local h = num(screenHeight)
+  local h = num(screenHeight) or (type(gamelua) == 'table' and num(gamelua.screenHeight))
   if h and h > 0 then return h end
-  return 768
+  return 720
 end
 
 local function p2s(x, y)
-  if type(physicsToScreenTransform) ~= 'function' then return nil end
-  local ok, sx, sy = pcall(physicsToScreenTransform, x, y)
+  local fn = physicsToScreenTransform or (type(gamelua) == 'table' and gamelua.physicsToScreenTransform)
+  if type(fn) ~= 'function' then return nil end
+  local ok, sx, sy = pcall(fn, x, y)
   if ok and type(sx) == 'number' and type(sy) == 'number' then return sx, sy end
   return nil
 end
@@ -102,6 +168,7 @@ local popup_open
 -- at the first that answers.
 local function menu_manager()
   if type(menuManager) == 'table' then return menuManager end
+  if type(gamelua) == 'table' and type(gamelua.menuManager) == 'table' then return gamelua.menuManager end
   if type(MenuManager) == 'table' then return MenuManager end
   if type(g_menuManager) == 'table' then return g_menuManager end
   if type(GameSystem) == 'table' and type(GameSystem.menuManager) == 'table' then return GameSystem.menuManager end
@@ -109,32 +176,49 @@ local function menu_manager()
 end
 
 local function base_frame()
-  if type(rootFrame) == 'table' then return rootFrame end
-  if type(g_rootFrame) == 'table' then return g_rootFrame end
-  if type(baseFrame) == 'table' then return baseFrame end
-  if type(g_baseFrame) == 'table' then return g_baseFrame end
-  local mm = menu_manager()
-  if not mm then return nil end
-  if type(mm._baseFrame) == 'table' then return mm._baseFrame end
-  if type(mm.rootFrame) == 'table' then return mm.rootFrame end
-  if type(mm.getRoot) == 'function' then
-    local ok, r = pcall(mm.getRoot, mm)
-    if ok and type(r) == 'table' then return r end
+  local r = nil
+  if type(rootFrame) == 'table' then r = rootFrame
+  elseif type(gamelua) == 'table' and type(gamelua.rootFrame) == 'table' then r = gamelua.rootFrame
+  elseif type(g_rootFrame) == 'table' then r = g_rootFrame
+  elseif type(baseFrame) == 'table' then r = baseFrame
+  elseif type(gamelua) == 'table' and type(gamelua.baseFrame) == 'table' then r = gamelua.baseFrame
+  elseif type(g_baseFrame) == 'table' then r = g_baseFrame
+  else
+    local mm = menu_manager()
+    if mm then
+      if type(mm._baseFrame) == 'table' then r = mm._baseFrame
+      elseif type(mm.rootFrame) == 'table' then r = mm.rootFrame
+      elseif type(mm.currentRoot) == 'table' then r = mm.currentRoot
+      elseif type(mm.getRoot) == 'function' then
+        local ok, res = pcall(mm.getRoot, mm)
+        if ok and type(res) == 'table' then r = res end
+      end
+    end
   end
-  return nil
+  if frame_no % 60 == 0 then 
+    if r == nil and type(menu_manager()) == 'table' then
+      local mm = menu_manager()
+      -- debug removed
+    elseif type(r) == 'table' then
+      -- debug removed
+    end
+  end
+  return r
 end
 
 local function base_handler()
-  if type(ui) == 'table' and type(ui.Frame) == 'table' then return ui.Frame.onPointerEvent end
+  local U = (type(ui) == 'table' and ui) or (type(gamelua) == 'table' and gamelua.ui)
+  if type(U) == 'table' and type(U.Frame) == 'table' then return U.Frame.onPointerEvent end
   return nil
 end
 
 local function live(f)
-  return type(f) == 'table' and f.visible and f.active
+  return type(f) == 'table' and f.visible ~= false and f.active ~= false
 end
 
 -- a frame that answers pointer events itself (a button of some kind)
 local function handles(f, base)
+  if type(f.onClick) == 'function' or type(f.onRelease) == 'function' then return true end
   local h = f.onPointerEvent
   return type(h) == 'function' and h ~= base
 end
@@ -145,6 +229,7 @@ end
 -- for a second.
 local probes = setmetatable({}, {__mode = 'k'})
 local function modal(f, base)
+  if f.enabled == false or (num(f.alpha) and f.alpha <= 0.05) then return false end
   if not handles(f, base) then return false end
   local c = probes[f]
   if c and frame_no - c.t < 60 then return c.r end
@@ -436,13 +521,6 @@ local page_turn -- the turn under way (page_turn_update)
 local PAGE_SECS = 0.75
 local PAGE_SWEEP = 1e-4
 local function flip_page(right)
-  if levelName == 'EpisodeSelection' or levelName == 'LevelSelection' or levelName == 'MainMenu' then
-    if type(updatePCCameraPanningToDirection) == 'function' then
-      last_flip = frame_no
-      pcall(updatePCCameraPanningToDirection, right and true or false)
-      return true
-    end
-  end
   if levelName ~= 'LevelSelection' then return false end
   -- one turn at a time: the next once the last has come to rest (or a
   -- finger's sweep, 300 updates at most)
@@ -881,7 +959,7 @@ end
 -- the main menu's flags: 1 it is the main menu, 2 its left tab is open, 4 its right one
 local function main_menu_flags()
   local mm = menu_manager()
-  local root = mm and call(mm.getRoot, mm)
+  local root = base_frame()
   if type(root) ~= 'table' or type(root.getChild) ~= 'function' then return 0 end
   local l = call(root.getChild, root, 'optionsSlider')
   if type(l) ~= 'table' then return 0 end
@@ -946,7 +1024,7 @@ end
 -- folds it, as its lightning button does.
 local function powerup_bar()
   local mm = type(GameSystem) == 'table' and GameSystem.menuManager
-  local root = type(mm) == 'table' and type(mm.getRoot) == 'function' and mm:getRoot()
+  local root = base_frame()
   local hud = type(root) == 'table' and type(root.getChild) == 'function' and root:getChild('gameHud')
   local sl = type(hud) == 'table' and hud.powerupSlider
   if type(sl) == 'table' and type(sl.toggle) == 'function' then return sl end
@@ -1057,10 +1135,13 @@ end
 
 -- --------------------------------------------------------------- camera
 local function camera_data()
-  if type(objects) ~= 'table' then return nil end
-  local b, c = objects.birdCameraData, objects.castleCameraData
+  local g = (type(gamelua) == 'table' and gamelua) or _G
+  local objs = objects or g.objects
+  if type(objs) ~= 'table' then return nil end
+  local b, c = objs.birdCameraData, objs.castleCameraData
   if type(b) ~= 'table' or type(c) ~= 'table' then return nil end
-  b, c = b[deviceModel], c[deviceModel]
+  local dm = deviceModel or g.deviceModel or 'android'
+  b, c = b[dm] or b['android'] or b['osx'] or b['windows'], c[dm] or c['android'] or c['osx'] or c['windows']
   if type(b) ~= 'table' or type(c) ~= 'table' then return nil end
   return b, c
 end
@@ -1073,64 +1154,68 @@ end
 -- finger's camera slides back to the nearer end; the stick's stays where it
 -- was put (isSwipingCamera held each update) until the game takes the camera
 -- (a bird to follow) or a bird is picked up. Zoom: currentZoomedScale,
--- which each end caps at its own scale (getTempBirdCamera), so the zoom is
--- taken from the end the camera is at -- zooming out works at once there.
-local cam_parked = false
+local cam_panning = false
+local last_cam_log = 0
 
 local function camera(px, py, z)
-  local b, c = camera_data()
-  local ws = num(worldScale)
-  if not b or not ws or ws <= 0 or not num(b.px) or not num(c.px) then return end
-  local dx, dy = math.abs(c.px - b.px), math.abs((num(c.py) or 0) - (num(b.py) or 0))
-  local horiz = dy < dx
-  if type(getLevelMetadata) == 'function' then
-    local ok, md = pcall(getLevelMetadata, levelName)
-    if ok and type(md) == 'table' and md.horizontalCameraSweep then horiz = true end
-  end
-  local dist = horiz and dx or dy
-  -- pan: along the line between the two cameras
-  local s = horiz and px or py
-  if s ~= 0 and dist > 1 and not ignoreCameraSweep then
-    local toward
-    if horiz then
-      toward = c.px > b.px and s or -s
-      if type(mirrorWorldHandler) == 'table' and mirrorWorldHandler.mirror then toward = -toward end
-    else
-      local _, yb = p2s(b.px, b.py)
-      local _, yc = p2s(c.px, c.py)
-      toward = (yc and yb and yc > yb) and -s or s -- the stick up looks up
-    end
-    local step = toward * screen_w() * 1.3 / 60 / (dist * ws)
-    local sl = (num(cameraAnimationSlider) or 0) + step
-    cameraAnimationSlider = math.max(0, math.min(1, sl))
-    sweepSpeed = 0
-    isSwipingCamera = true
-    if type(doItAllCamera) == 'function' then cameraFunction = doItAllCamera end
-    local tgt = cameraTargetObject
-    if type(tgt) == 'table' and (type(flyingBird) ~= 'table' or flyingBird.name ~= tgt.name) then
-      call(setCameraTargetObject, nil)
-    end
-    cam_parked = true
-  elseif cam_parked then
-    if cameraTargetObject ~= nil or selectedBird ~= nil or cameraFunction ~= doItAllCamera then
-      cam_parked = false
-    else
-      isSwipingCamera = true
+  local g = (type(gamelua) == 'table' and gamelua) or _G
+  local gc = gameCamera or g.gameCamera
+  
+  if type(gc) == 'table' and not g.dumped_gc then
+    g.dumped_gc = true
+    for k, v in pairs(gc) do
+      print("[camera_dump] " .. tostring(k) .. " = " .. type(v))
     end
   end
-  -- zoom
-  local zz = z + (horiz and py or 0)
-  if zz ~= 0 and num(currentZoomedScale) and num(b.sx) and num(c.sx) then
-    local sl = num(cameraAnimationSlider) or 0
-    local cap = sl < 0.5 and b.sx or c.sx
-    local lo = num(minWorldScale) or 0
-    local cz = math.min(currentZoomedScale, cap) * (1 + zz * 0.022)
-    cz = math.max(lo, math.min(cap, cz))
-    currentZoomedScale = cz
-    maxZoomLevel = cz >= math.max(b.sx, c.sx) - 1e-6
-    oldZoomLevel = zoomLevel -- no pinch in between
+
+  if type(gc) ~= 'table' then return end
+
+  -- If any camera movement is requested, detach from the bird
+  if px ~= 0 or py ~= 0 or math.abs(z) > 0.2 then
+    local tgt = gc.cameraTargetObjects
+    if type(tgt) == 'table' then
+      -- Safely empty the array without replacing the C++ bound table object
+      while #tgt > 0 do table.remove(tgt) end
+    end
+  end
+
+  if px ~= 0 or py ~= 0 then
+    local sl = num(gc.cameraAnimationSlider) or 0
+    sl = sl + px * 0.012
+    sl = math.max(0, math.min(1, sl))
+    
+    gc.cameraAnimationSlider = sl
+    if gc.cameraAnimationSliderTarget ~= nil then
+      gc.cameraAnimationSliderTarget = sl
+    end
+    gc.velocity = 0
+    
+    if type(g.doItAllCamera) == 'function' then
+      gc.currentCameraFunction = g.doItAllCamera
+    end
+  end
+
+  -- Deadzone for zoom to prevent accidental zooming when panning
+  if math.abs(z) > 0.2 then
+    if type(gc.setZoomScale) == 'function' then
+      local cz = num(gc.currentZoomedScale) or 1.0
+      
+      -- z < 0 is UP on the joystick. We want UP to zoom IN (acercar), so factor < 1.0.
+      -- z > 0 is DOWN on the joystick. We want DOWN to zoom OUT (alejar), so factor > 1.0.
+      local factor = 1.0 + z * 0.015
+      local new_cz = cz * factor
+      
+      print("[zoom_debug] RightStick z=" .. tostring(z) .. " currentZoomedScale=" .. tostring(gc.currentZoomedScale) .. " animationWorldScale=" .. tostring(gc.animationWorldScale) .. " animationWorldScale2=" .. tostring(gc.animationWorldScale2))
+      
+      -- Clamp the zoom scale safely between reasonable bounds
+      new_cz = math.max(0.01, math.min(10.0, new_cz))
+      
+      -- Remove screen coordinate overrides, let the engine zoom around current center
+      pcall(gc.setZoomScale, gc, new_cz)
+    end
   end
 end
+
 
 -- ------------------------------------------------------ free purchases
 -- The store is long gone and the port is offline, so every purchase is
@@ -1799,12 +1884,23 @@ end
 -- A level is being played only while its scene is the page on top: the
 -- shop, opened from a level (the power-ups bar's button, the Space Eagle's
 -- when there are none left: Shop.loginAndEnter), takes the level's place and
--- keeps levelName for the way back, so isInGameMode() still says yes.
 local function level_on_top()
+  local in_mm = g_inMainMenu
+  if in_mm == nil and type(gamelua) == 'table' then in_mm = gamelua.g_inMainMenu end
+  local cbn = currentBirdName
+  if cbn == nil and type(gamelua) == 'table' then cbn = gamelua.currentBirdName end
+  local timer = g_levelTimer
+  if timer == nil and type(gamelua) == 'table' then timer = gamelua.g_levelTimer end
+
+  if in_mm == false and cbn ~= nil then return true end
+  if type(timer) == 'number' then return true end
+
   local mm = menu_manager()
-  local root = mm and call(mm.getRoot, mm)
-  if type(root) ~= 'table' or type(GameScene) ~= 'table' then return true end -- can't tell: as before
-  return is_a(root, GameScene)
+  local root = base_frame()
+  if not root then return false end
+  local hud = call(root.getChild, root, 'gameHud')
+  if hud and hud.visible ~= false then return true end
+  return false
 end
 
 -- ---------------------------------------------------------------- frame
@@ -1952,12 +2048,28 @@ local function housekeeping(flags, memlimit)
 end
 
 function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
+  link_gamelua()
   frame_no = frame_no + 1
   -- a command may carry a number (C: cmd + n * 256): a carousel turn's time in ms
   local cmd_arg = 0
   if type(cmd) == 'number' and cmd >= 256 then
     cmd_arg = math.floor(cmd / 256)
     cmd = cmd - cmd_arg * 256
+  end
+
+
+
+  if cmd == 4 or cmd == 5 then
+    if _G._last_page_cmd == cmd and type(_G._page_cmd_timer) == 'number' and _G._page_cmd_timer > 0 then
+      cmd = 0
+      _G._page_cmd_timer = _G._page_cmd_timer - 1
+    else
+      _G._last_page_cmd = cmd
+      _G._page_cmd_timer = 30
+    end
+  else
+    _G._last_page_cmd = 0
+    _G._page_cmd_timer = 0
   end
   flags = flags or 0
   focus_id = focus
@@ -1971,62 +2083,106 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
 
   housekeeping(flags, memlimit)
 
-  local ingame = call(isInGameMode) and type(objects) == 'table' and level_on_top()
+  local mm = menu_manager()
+  local root = base_frame()
+  local hud = root and call(root.getChild, root, 'gameHud')
+  local hud_active = (hud ~= nil and hud.visible ~= false)
+
+  local igp = isInGameplay or (type(gamelua) == 'table' and gamelua.isInGameplay)
+  local in_gameplay = false
+  if type(igp) == 'function' then
+    local ok, r = pcall(igp)
+    if ok and r == true then in_gameplay = true end
+  end
+
+  local igm = isInGameMode or (type(gamelua) == 'table' and gamelua.isInGameMode)
+  local in_gamemode = false
+  if type(igm) == 'function' then
+    local ok, r = pcall(igm)
+    if ok and r == true then in_gamemode = true end
+  end
+
+  local in_mm = g_inMainMenu or (type(gamelua) == 'table' and gamelua.g_inMainMenu)
+  local objs = objects or (type(gamelua) == 'table' and gamelua.objects)
+  local cbn = currentBirdName or (type(gamelua) == 'table' and gamelua.currentBirdName)
+  local br = birdReady or (type(gamelua) == 'table' and gamelua.birdReady)
+  local fb = flyingBird or (type(gamelua) == 'table' and gamelua.flyingBird)
+  local lsp = levelStartPosition or (type(gamelua) == 'table' and gamelua.levelStartPosition)
+  local cls = g_currentLevelString or (type(gamelua) == 'table' and gamelua.g_currentLevelString)
+  local ln = levelName or (type(gamelua) == 'table' and gamelua.levelName) or cls
+
+  local ingame = false
+  if (hud_active == true) or (in_gameplay == true) or level_on_top() then
+    ingame = true
+  end
+
   if ingame then
-    if call(isPausePageVisible) then
+    local pause_child = (hud and call(hud.getChild, hud, 'pausePage'))
+    local pause_vis = pause_child and pause_child.visible
+    local ippv = isPausePageVisible or (type(gamelua) == 'table' and gamelua.isPausePageVisible) or
+                 isPausePageShowing or (type(gamelua) == 'table' and gamelua.isPausePageShowing)
+    if pause_vis or call(ippv) then
       mode = MODE_PAUSED
     elseif popup_open() then
       mode = MODE_MENU -- a popup over the level (a link's, a prompt): its buttons
-    elseif levelCompleted == true or call(isLevelEnded) then
+    elseif levelCompleted == true or (type(gamelua) == 'table' and gamelua.levelCompleted == true) or
+           call(isLevelEnded or (type(gamelua) == 'table' and gamelua.isLevelEnded)) then
       mode = MODE_ENDED
     else
-      local world = objects.world
+      local world = (type(objs) == 'table' and objs.world) or world or (type(gamelua) == 'table' and gamelua.world)
       local uses = true
-      local lm = objects.levelMode
+      local lm = (type(objs) == 'table' and objs.levelMode) or levelMode or (type(gamelua) == 'table' and gamelua.levelMode)
       if type(lm) == 'table' and type(lm.usesSlingshot) == 'function' then
         local ok, r = pcall(lm.usesSlingshot, lm)
         if ok then uses = r and true or false end
       end
-      local have = uses and currentBirdName ~= nil and not ignorePlayerInput and
-                   type(world) == 'table' and world[currentBirdName] ~= nil
-      if type(levelStartPosition) == 'table' and num(levelStartPosition.x) then
-        local x, y = p2s(levelStartPosition.x, levelStartPosition.y)
-        local ex = p2s(levelStartPosition.x + MAX_LENGTH, levelStartPosition.y)
+      local ipi = ignorePlayerInput or (type(gamelua) == 'table' and gamelua.ignorePlayerInput)
+      local have = uses and cbn ~= nil and not ipi and
+                   type(world) == 'table' and world[cbn] ~= nil
+      if type(lsp) == 'table' and num(lsp.x) then
+        local x, y = p2s(lsp.x, lsp.y)
+        local ex = p2s(lsp.x + MAX_LENGTH, lsp.y)
         if x and ex then
           lx, ly = x / sw, y / sh
-          pullr = ex - x
-          if pullr < 0 then pullr = -pullr end
-          pullr = pullr / sw
+          pullr = math.abs(ex - x) / sw
         end
       end
       if have then
-        local bird = world[currentBirdName]
-        if num(bird.x) then
+        local bird = world[cbn]
+        if type(bird) == 'table' and num(bird.x) then
           local x, y = p2s(bird.x, bird.y)
           if x then bx, by = x / sw, y / sh end
         end
       end
-      aiming = (selectedBird ~= nil) and 1 or 0
-      special = (flyingBird ~= nil and birdSpecialtyAvailable == true) and 1 or 0
-      -- a power aimed where it is tapped (the Lazer bird's dash; the Orbital
-      -- Escapade worlds' Iron bird egg and Pink bird beam): 2, and the
-      -- flying bird's place for the cursor to start from
-      if special == 1 and type(flyingBird) == 'table' and num(flyingBird.x) and type(blockTable) == 'table' and
-         type(blockTable.blocks) == 'table' then
-        local d = blockTable.blocks[flyingBird.definition]
+      -- FALLBACK: If bx < 0 (bird coordinates not resolved from world), but slingshot lx, ly is known:
+      if bx < 0 and lx >= 0 then
+        bx, by = lx, ly
+      end
+      if lx < 0 then
+        lx, ly = 0.24, 0.58
+        if bx < 0 then bx, by = lx, ly end
+      end
+      if pullr <= 0 then pullr = 0.15 end
+
+      local sb = selectedBird or (type(gamelua) == 'table' and gamelua.selectedBird)
+      local bsa = birdSpecialtyAvailable or (type(gamelua) == 'table' and gamelua.birdSpecialtyAvailable)
+      aiming = (sb ~= nil) and 1 or 0
+      special = (fb ~= nil and bsa == true) and 1 or 0
+
+      local bt = blockTable or (type(gamelua) == 'table' and gamelua.blockTable)
+      if special == 1 and type(fb) == 'table' and num(fb.x) and type(bt) == 'table' and
+         type(bt.blocks) == 'table' then
+        local d = bt.blocks[fb.definition]
         if type(d) == 'table' and AIMED_POWERS[d.specialty] then
           special = 2
-          local x, y = p2s(flyingBird.x, flyingBird.y)
+          local x, y = p2s(fb.x, fb.y)
           if x then fbx, fby = x / sw, y / sh end
         end
       end
-      -- a flying bird's power still unused comes first, as with a finger
-      -- (DefaultMode.handleInputLogic spends any press on it): the next bird
-      -- is not grabbed until it is used or gone -- the stick steering the
-      -- aimed powers' cursor would otherwise set it off
-      if have and birdReady == true and bx >= 0 and special == 0 then
+
+      if (br == true or (br == nil and fb == nil and not ipi)) and bx >= 0 and special == 0 then
         mode, ready = MODE_AIM, 1
-      elseif flyingBird ~= nil then
+      elseif fb ~= nil and type(fb) == 'table' then
         mode = MODE_FLIGHT
       else
         mode = MODE_WAIT
@@ -2035,15 +2191,29 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       if mode == MODE_FLIGHT and fbx then bx, by = fbx, fby end
       pcall(camera, p or 0, py or 0, z or 0)
       if cmd == CMD_SLING or cmd == CMD_CASTLE then
-        cam_parked = false
-        call(updatePCCameraPanningToDirection, cmd == CMD_CASTLE)
+        local pan_fn = updatePCCameraPanningToDirection or (type(gamelua) == 'table' and gamelua.updatePCCameraPanningToDirection)
+        if type(pan_fn) == 'function' then
+          call(pan_fn, cmd == CMD_CASTLE)
+        else
+          local gc = gameCamera or (type(gamelua) == 'table' and gamelua.gameCamera)
+          if type(gc) == 'table' and type(gc.moveBetweenCameras) == 'function' then
+            pcall(gc.moveBetweenCameras, gc, 0.0, cmd == CMD_CASTLE and 1.0 or 0.0)
+          end
+        end
       end
     end
     if cmd == CMD_PAUSE then
-      call(togglePausePage)
+      local tpp = togglePausePage or (type(gamelua) == 'table' and gamelua.togglePausePage) or
+                  togglePause or (type(gamelua) == 'table' and gamelua.togglePause)
+      call(tpp)
     elseif cmd == CMD_RESTART then
-      local x, y = tap_button('restart')
-      if x then tx, ty = x, y end
+      local r_fn = restartLevel or (type(gamelua) == 'table' and gamelua.restartLevel)
+      if type(r_fn) == 'function' then
+        call(r_fn)
+      else
+        local x, y = tap_button('restart')
+        if x then tx, ty = x, y end
+      end
     elseif cmd == CMD_POWERUPS then
       -- the power-ups bar: open or fold it, as its lightning button does
       local sl = powerup_bar()
@@ -2054,6 +2224,10 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       local x, y = tap_button('me_clicked')
       if not x then x, y = tap_button('eagle') end
       if x then tx, ty = x, y end
+    elseif cmd == CMD_EPISODE_LIGHT then
+      tx, ty = sw * 0.25, sh * 0.5
+    elseif cmd == CMD_EPISODE_DARK then
+      tx, ty = sw * 0.75, sh * 0.5
     end
   end
 
@@ -2087,6 +2261,8 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
     end
   end
 
+
+
   local r = '-'
   if #reqs > 0 then
     r = concat(reqs, ','):gsub('[^%w_:,%-]', '')
@@ -2097,13 +2273,15 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local okv, a, b2, c2, d2 = pcall(popup_vrect)
   if okv and a then vx, vy, vw, vh = a / sw, b2 / sh, c2 / sw, d2 / sh end
 
-  return sfmt('%d %d %.1f %.1f %d %.4f %.4f %.4f %.4f %.4f %d %d %.4f %.4f %s %s %.3f %d %.4f %.4f %.4f %.4f %d %d %s',
+  return sfmt('%d %d %.1f %.1f %d %.4f %.4f %.4f %.4f %.4f %d %d %.4f %.4f %s %s %.3f %d %.4f %.4f %.4f %.4f %d %d %d %s',
               game, mode, sw, sh, ready, bx, by, lx, ly, pullr, aiming, special, tx, ty, sig, r,
-              num(time) or -1, mmf, vx, vy, vw, vh, carousel, nb, list)
+              num(time) or -1, mmf, vx, vy, vw, vh, carousel, levelName == 'EpisodeSelection' and 1 or 0, nb, list)
 end
 
 -- what the last scan saw, for debug.log ([debug] log_lua)
 function A.dump()
   local nb, list, sig, _, carousel = buttons()
-  return sfmt('sig %s carousel %d, %d items: %s', sig, carousel, nb, list)
+  return sfmt('sig %s carousel %d, %d items: %s', sig, carousel, levelName == 'EpisodeSelection' and 1 or 0, nb, list)
 end
+
+link_gamelua()

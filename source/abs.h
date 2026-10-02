@@ -121,7 +121,8 @@ typedef struct {
   int special;           /* the flying bird's power is still unused */
   int aiming;            /* a bird is held (touch or ours) */
   char sig[24];          /* the screen or popup on top: changes with it */
-  int carousel;          /* the planet carousel is on screen (2: turning) */
+  int carousel;
+  int is_ep_sel;          /* the planet carousel is on screen (2: turning) */
   int mm;                /* the main menu: 1 on screen, +2 its left tab open, +4 its right one */
   int nbuttons;
   AbsItem buttons[ABS_MAX_BUTTONS];
@@ -145,6 +146,8 @@ enum {
   ABS_CMD_SPIN_LEFT,         /* the planet carousel: the left planet to the middle */
   ABS_CMD_SPIN_RIGHT,        /* ... the right one */
   ABS_CMD_POWERUPS,          /* a level's power-ups bar (bottom left): open / fold it */
+  ABS_CMD_EPISODE_LIGHT,
+  ABS_CMD_EPISODE_DARK,
 };
 void abs_lua_command(int cmd);
 #define ABS_CMD_ARG(cmd, n) ((cmd) + (n) * 256) /* a command with a number (abs_ctl.lua A.frame) */

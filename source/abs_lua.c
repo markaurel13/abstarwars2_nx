@@ -228,6 +228,7 @@ static void parse(const char *s, Uni *u) {
   st.mm = (int)next_f(&p);
   float vx = next_f(&p), vy = next_f(&p), vw = next_f(&p), vh = next_f(&p);
   st.carousel = (int)next_f(&p);
+  st.is_ep_sel = (int)next_f(&p);
   int n = (int)next_f(&p);
   if (n > ABS_MAX_BUTTONS)
     n = ABS_MAX_BUTTONS;

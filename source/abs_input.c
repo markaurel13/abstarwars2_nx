@@ -109,6 +109,7 @@ static struct {
 static void syn_down(float x, float y) {
   if (g_syn.down)
     abs_touch(ACT_UP, g_syn.x, g_syn.y, SYN_ID);
+  debugPrintf("[input] syn_down: screen_x=%.1f screen_y=%.1f\n", x, y);
   g_syn.down = 1;
   g_syn.x = x, g_syn.y = y;
   abs_touch(ACT_DOWN, x, y, SYN_ID);
@@ -124,6 +125,7 @@ static void syn_move(float x, float y) {
 static void syn_up(void) {
   if (!g_syn.down)
     return;
+  debugPrintf("[input] syn_up: released touch\n");
   g_syn.down = 0;
   abs_touch(ACT_UP, g_syn.x, g_syn.y, SYN_ID);
 }
@@ -132,6 +134,7 @@ static void syn_tap(float x, float y) {
   g_syn.up_next = 1;
 }
 
+/* synthetic horizontal swipe for menu/world navigation removed */
 /* abs_cursor.c's touches: 0 down, 1 up, 2 move */
 void abs_input_syn(int phase, float x, float y) {
   if (phase == 0)
@@ -194,6 +197,8 @@ static struct {
   u64 repage;       /* ZL/ZR (or a push past the last item) turned the page: the focus follows */
   /* restart hold */
   u64 x_since;
+  u64 launch_time;
+  int just_launched;
   int x_fired;
   u32 last_tap_seq;
   int real_touch;  /* a finger is on the screen */
@@ -289,6 +294,7 @@ static void dz(float *x, float *y, float d) {
 static void aim_release_cancel(void) {
   /* back to the slingshot, then let go: under the cancel limit the game
    * puts the bird back */
+  debugPrintf("[input] aim_release_cancel: returning bird to slingshot\n");
   S.returning = 1;
   S.held = 0;
 }
@@ -296,8 +302,22 @@ static void aim_release_cancel(void) {
 static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float lsy, float rsx, float rsy,
                   u64 k_a, u64 k_b) {
   const DcrConfig *cfg = dcr_config();
-  /* ---- camera: the right stick moves it along the level ---- */
-  abs_lua_set_analog(rsx, rsy, 0.0f);
+  float cam_pan = rsx, cam_zoom = rsy;
+  if (held & HidNpadButton_Left) cam_pan = -1.0f;
+  if (held & HidNpadButton_Right) cam_pan = 1.0f;
+  if (held & HidNpadButton_Up) cam_zoom = 1.0f;
+  if (held & HidNpadButton_Down) cam_zoom = -1.0f;
+  if (held & HidNpadButton_ZL) cam_pan = -1.0f;
+  if (held & HidNpadButton_ZR) cam_pan = 1.0f;
+  abs_lua_set_analog(cam_pan, 0.0f, cam_zoom);
+
+  static u64 last_stick_log = 0;
+  u64 now_tick = armGetSystemTick();
+  if ((fabsf(cam_pan) > 0.1f || fabsf(cam_zoom) > 0.1f) && armTicksToNs(now_tick - last_stick_log) > 500000000ull) {
+    last_stick_log = now_tick;
+    debugPrintf("[input] RightStick: pan=%.2f zoom=%.2f\n", cam_pan, cam_zoom);
+  }
+
   if (down & HidNpadButton_L) {
     /* the slingshot's view and the target's, in turn */
     S.cam_castle = !S.cam_castle;
@@ -332,30 +352,34 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   float sx = lsx, sy = -lsy; /* screen axes: y down */
   if (cfg->aim == ABS_AIM_PUSH)
     sx = -sx, sy = -sy;
-  float m = sqrtf(sx * sx + sy * sy);
 
   /* ---- aiming ----
-   * ZL prepares/tensions the bird in the slingshot.
-   * Left stick adjusts direction, angle and intensity.
-   * ZR (or A / X) fires the bird.
+   * Left stick directly controls tension and direction. Initiates pull if moved.
    * B cancels the pull.
+   * A fires the bird.
    */
-  const int can_aim = (st->mode == ABS_MODE_AIM);
-  const int prepare = (held & HidNpadButton_ZL) || (down & HidNpadButton_ZL) || (m > 0.15f);
-
+  const int can_aim = (st->mode == ABS_MODE_AIM || st->mode == ABS_MODE_WAIT);
+  
   if (can_aim || S.aiming) {
-    const float ox = st->sling_x >= 0 ? st->sling_x : st->bird_x;
-    const float oy = st->sling_y >= 0 ? st->sling_y : st->bird_y;
+    const float bx = st->bird_x >= 0 ? st->bird_x : (st->sling_x >= 0 ? st->sling_x : abs_surface_w() * 0.24f);
+    const float by = st->bird_y >= 0 ? st->bird_y : (st->sling_y >= 0 ? st->sling_y : abs_surface_h() * 0.58f);
+    const float ox = st->sling_x >= 0 ? st->sling_x : bx;
+    const float oy = st->sling_y >= 0 ? st->sling_y : by;
     if (S.pending_up) {
-      /* the shot (or the let-go) decided last update: lift the finger now */
       S.pending_up = 0;
       syn_up();
-      S.aiming = S.held = S.returning = S.pending_up = 0;
+      S.aiming = S.held = S.returning = 0;
       return;
     }
-    if (!S.aiming && prepare && can_aim && !S.real_touch) {
-      if (st->bird_x < 0 || st->bird_y < 0 || st->bird_x > abs_surface_w() || st->bird_y > abs_surface_h()) {
-        /* the camera is away from the slingshot: back to it first */
+    
+    float stick_dist = sqrtf(sx * sx + sy * sy);
+    if (S.just_launched) {
+      if (stick_dist <= 0.05f && st->mode == ABS_MODE_AIM)
+        S.just_launched = 0;
+    }
+
+    if (!S.aiming && !S.just_launched && stick_dist > 0.05f && can_aim && !S.real_touch) {
+      if (bx < 0 || by < 0 || bx > abs_surface_w() || by > abs_surface_h()) {
         u64 now = armGetSystemTick();
         if (armTicksToNs(now - S.cam_back_at) > 600000000ull) {
           S.cam_back_at = now;
@@ -364,85 +388,52 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
         }
         return;
       }
-      /* grab the bird where it sits; the pull starts next update */
-      syn_down(st->bird_x, st->bird_y);
+      syn_down(bx, by);
       S.aiming = 1;
       S.held = 1;
       S.returning = 0;
-      S.ax = S.ay = 0;
+      S.ax = sx;
+      S.ay = sy;
       return;
     }
+    
     if (S.aiming) {
-      const u64 fire_btn = HidNpadButton_ZR | HidNpadButton_X | k_a;
-      if (down & fire_btn) {
-        /* launch from where the bird is now */
-        if (sqrtf(S.ax * S.ax + S.ay * S.ay) * BAND_MAX > BAND_CANCEL) {
-          syn_up();
-          S.aiming = S.held = S.returning = S.pending_up = 0;
-          return;
-        }
-      } else if (down & k_b) {
-        aim_release_cancel();
+      if (down & k_a) {
+        /* launch */
+        debugPrintf("[input] A pressed: launching bird\n");
+        syn_up();
+        S.aiming = S.held = S.returning = 0;
+        S.launch_time = armGetSystemTick();
+        S.just_launched = 1;
+        return;
       }
-      if (m > 0.05f && !S.returning) {
-        /* stick travel controls pull direction and intensity */
-        const float lo = (BAND_CANCEL + 0.15f) / BAND_MAX, hi = 1.02f;
-        float want = lo + (hi - lo) * m;
-        float tx = sx / m * want, ty = sy / m * want;
-        S.ax += (tx - S.ax) * 0.55f;
-        S.ay += (ty - S.ay) * 0.55f;
-        S.held = 1;
-      } else if (S.returning) {
+
+      if (!S.returning) {
+        /* map stick directly to tension if pushed; else cancel aim */
+        if (stick_dist > 0.05f) {
+          S.ax = sx;
+          S.ay = sy;
+        } else {
+          aim_release_cancel();
+        }
+      } else {
         S.ax *= 0.5f, S.ay *= 0.5f;
         if (fabsf(S.ax) < 0.02f && fabsf(S.ay) < 0.02f) {
-          /* at the slingshot: lift next update, under the cancel limit */
           S.ax = S.ay = 0;
           syn_move(ox, oy);
           S.pending_up = 1;
           return;
         }
       }
-      /* fine aim with the D-pad: angle and power of the shot */
-      int du = !!(down & HidNpadButton_Up) - !!(down & HidNpadButton_Down);
-      int dp = !!(down & HidNpadButton_Right) - !!(down & HidNpadButton_Left);
-      if ((du || dp) && !S.returning) {
-        float len = sqrtf(S.ax * S.ax + S.ay * S.ay);
-        if (len < 0.05f) {
-          /* nothing yet: a level shot toward the target side */
-          S.ax = st->bird_x <= abs_surface_w() * 0.5f ? -0.8f : 0.8f;
-          S.ay = 0.0f, len = 0.8f;
-        }
-        float ang = atan2f(S.ay, S.ax);
-        /* the shot goes the other way from the pull: "up" raises it */
-        float fire_x = -S.ax;
-        ang += (float)du * 0.0087f * cfg->aim_speed * (fire_x >= 0 ? 1.0f : -1.0f);
-        len += (float)dp * 0.01f * cfg->aim_speed;
-        if (len > 1.02f)
-          len = 1.02f;
-        if (len < 0.1f)
-          len = 0.1f;
-        S.ax = cosf(ang) * len, S.ay = sinf(ang) * len;
-        S.held = 1;
-      }
+      
       syn_move(ox + S.ax * R, oy + S.ay * R);
       return;
     }
   }
 
   /* ---- not aiming ---- */
-  if (down & HidNpadButton_Left) {
-    S.cam_castle = 0;
-    abs_lua_command(ABS_CMD_CAMERA_SLING);
-  }
-  if (down & HidNpadButton_Right) {
-    S.cam_castle = 1;
-    abs_lua_command(ABS_CMD_CAMERA_CASTLE);
-  }
-  const u64 fire_btn = HidNpadButton_ZR | HidNpadButton_X | k_a;
+  const u64 fire_btn = k_a;
   if (st->mode == ABS_MODE_FLIGHT && st->special == 2) {
-    /* a bird in the air whose power is aimed (the Lazer bird's dash, the
-     * Iron bird's egg, the Pink bird's beam): the left stick moves the
-     * cursor from where the bird was, ZR / X / A uses the power there */
     if (!S.pcur) {
       S.pcur = 1;
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
@@ -451,17 +442,24 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     }
     abs_cursor_aim(lsx, lsy);
     if (down & fire_btn) {
-      float x, y;
-      abs_cursor_pos(&x, &y);
-      syn_tap(x, y);
-      abs_cursor_click();
+      if (armTicksToNs(armGetSystemTick() - S.launch_time) > 300000000ull) {
+        debugPrintf("[input] A pressed: activating power\n");
+        float cx, cy;
+        abs_cursor_pos(&cx, &cy);
+        syn_tap(cx, cy);
+        abs_cursor_click();
+      }
     }
     return;
   }
+  
   if (down & fire_btn) {
-    /* a bird in the air: its power. Otherwise a tap on the scene (tutorial
-     * notes, skipping the camera tour) */
-    syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.55f);
+    if (st->mode == ABS_MODE_FLIGHT || st->mode == ABS_MODE_WAIT) {
+      if (armTicksToNs(armGetSystemTick() - S.launch_time) > 300000000ull) {
+        debugPrintf("[input] A pressed: activating power\n");
+        syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.55f);
+      }
+    }
   }
   /* B does not pause (+ does) */
 }
@@ -660,14 +658,10 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
                   u64 k_b) {
   const int carousel = st->carousel;
 
-  /* the right stick brings out the hand cursor, the left stick and the
-   * D-pad bring the ring back */
+  /* R toggles the mouse cursor: right stick does not auto-activate it */
   const u64 dpad = HidNpadButton_Up | HidNpadButton_Down | HidNpadButton_Left | HidNpadButton_Right;
   int returned = 0;
-  if (!S.mcursor && rsx * rsx + rsy * rsy > 0.25f * 0.25f) {
-    S.mcursor = 1;
-    abs_cursor_enter(S.focus_on ? S.fitem.ax : -1, S.focus_on ? S.fitem.ay : -1);
-  } else if (S.mcursor && ((down & dpad) || lsx * lsx + lsy * lsy > 0.5f * 0.5f)) {
+  if (S.mcursor && (down & dpad)) {
     S.mcursor = 0;
     abs_cursor_leave();
     S.nav_dir = 9; /* the push that brought the ring back does not also move it */
@@ -682,15 +676,14 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     return;
   }
 
-  /* a carousel turn's time (abs_ctl.lua spin): a press, a little quicker
-   * than the game's 0.5 s */
+  /* ZL and ZR: scroll worlds/pages horizontally with swipe and page commands */
   int spin_ms = SPIN_MS;
-  if (down & (HidNpadButton_L | HidNpadButton_ZL)) {
+  if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZL)) {
     abs_lua_command(carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_LEFT, spin_ms) : ABS_CMD_PAGE_PREV);
     if (!carousel)
       S.repage = armGetSystemTick();
   }
-  if (down & HidNpadButton_ZR) {
+  if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZR)) {
     abs_lua_command(carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_RIGHT, spin_ms) : ABS_CMD_PAGE_NEXT);
     if (!carousel)
       S.repage = armGetSystemTick();
@@ -698,46 +691,11 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   if ((down & HidNpadButton_Plus) && st->mode == ABS_MODE_PAUSED)
     abs_lua_command(ABS_CMD_PAUSE);
 
-  /* a direction, in 8: the D-pad (two held together make a diagonal), or
-   * the stick with repeat */
+  /* a direction: the D-pad (left stick is disabled in menus) */
   float dx = 0, dy = 0;
   if (down & dpad) {
     dx = (float)(!!(held & HidNpadButton_Right) - !!(held & HidNpadButton_Left));
     dy = (float)(!!(held & HidNpadButton_Down) - !!(held & HidNpadButton_Up));
-  } else {
-    int sd = 0;
-    if (lsx * lsx + lsy * lsy > 0.6f * 0.6f) {
-      float a = atan2f(-lsy, lsx); /* screen axes */
-      sd = 1 + ((int)lroundf(a / 0.78539816f) + 8) % 8;
-    }
-    u64 now = armGetSystemTick();
-    if (sd && S.nav_dir == 9) {
-      /* still the push that brought the ring back */
-    } else if (sd && (sd != S.nav_dir || now >= S.nav_next)) {
-      float a = (float)(sd - 1) * 0.78539816f;
-      dx = roundf(cosf(a)), dy = roundf(sinf(a));
-      int spin = carousel && S.fkind == ABS_ITEM_CENTRE && dy == 0;
-      u64 wait;
-      if (sd != S.nav_dir) {
-        S.nav_since = now;
-        wait = spin ? SPIN_FIRST_NS : 350000000ull;
-      } else if (spin) {
-        /* held on the carousel: sooner and sooner, to SPIN_FAST_NS after
-         * SPIN_RAMP_NS of holding; each turn lasts twice the time since the
-         * last, so the planets are still moving when the next is asked for */
-        const u64 h = armTicksToNs(now - S.nav_since);
-        wait = h >= SPIN_RAMP_NS ? SPIN_FAST_NS
-                                 : SPIN_FIRST_NS - (SPIN_FIRST_NS - SPIN_FAST_NS) * h / SPIN_RAMP_NS;
-        int ms = (int)(armTicksToNs(now - S.nav_last) / 500000ull); /* twice, in ms */
-        spin_ms = ms < 200 ? 200 : ms > 400 ? 400 : ms;
-      } else {
-        wait = 140000000ull;
-      }
-      S.nav_last = now;
-      S.nav_next = now + armNsToTicks(wait);
-    }
-    if (!sd || S.nav_dir != 9)
-      S.nav_dir = sd;
   }
   int dir = (dx != 0 || dy != 0) && !returned;
   if (dir || (down & k_a)) {
@@ -869,10 +827,15 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     if (n >= 0)
       focus_set(st, n);
   }
-  if ((down & k_a) && S.fitem.vis)
-    syn_tap(S.fitem.ax, S.fitem.ay);
-  if (down & k_b)
+  if (down & k_a) {
+    debugPrintf("[input] A pressed in menu: id=%d, vis=%d, kind=%d, ax=%f, ay=%f\n", S.fitem.id, S.fitem.vis, S.fitem.kind, S.fitem.ax, S.fitem.ay);
+    if (S.fitem.vis)
+      syn_tap(S.fitem.ax, S.fitem.ay);
+  }
+  if (down & k_b) {
+    debugPrintf("[input] B pressed in menu\n");
     back_press(st);
+  }
 }
 
 void abs_input_popup_closed(void) {
@@ -958,6 +921,13 @@ void abs_input_update(void) {
 
   const int in_level =
       st.mode == ABS_MODE_AIM || st.mode == ABS_MODE_FLIGHT || st.mode == ABS_MODE_WAIT || S.aiming;
+
+  static u64 last_ls_log = 0;
+  if ((fabsf(lsx) > 0.1f || fabsf(lsy) > 0.1f) && armTicksToNs(armGetSystemTick() - last_ls_log) > 500000000ull) {
+    last_ls_log = armGetSystemTick();
+    debugPrintf("[input] LeftStick: x=%.2f y=%.2f, InLevel=%d, Aiming=%d, TouchMode=%d\n", lsx, lsy, in_level, S.aiming, S.touch_mode);
+  }
+
   /* R: activate / deactivate mouse cursor anytime (in menus or in levels) */
   if (down & HidNpadButton_R)
     set_scheme(S.scheme == ABS_SCHEME_CURSOR ? ABS_SCHEME_CONSOLE : ABS_SCHEME_CURSOR);
