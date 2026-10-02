@@ -436,6 +436,13 @@ local page_turn -- the turn under way (page_turn_update)
 local PAGE_SECS = 0.75
 local PAGE_SWEEP = 1e-4
 local function flip_page(right)
+  if levelName == 'EpisodeSelection' or levelName == 'LevelSelection' or levelName == 'MainMenu' then
+    if type(updatePCCameraPanningToDirection) == 'function' then
+      last_flip = frame_no
+      pcall(updatePCCameraPanningToDirection, right and true or false)
+      return true
+    end
+  end
   if levelName ~= 'LevelSelection' then return false end
   -- one turn at a time: the next once the last has come to rest (or a
   -- finger's sweep, 300 updates at most)

@@ -296,15 +296,8 @@ static void aim_release_cancel(void) {
 static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float lsy, float rsx, float rsy,
                   u64 k_a, u64 k_b) {
   const DcrConfig *cfg = dcr_config();
-  /* ---- camera: the right stick moves it along the level (up/down zoom in
-   * a level that goes sideways), ZR / ZL zoom (ZL is the fine aim while a
-   * bird is pulled back) ---- */
-  float zoom = 0;
-  if (held & HidNpadButton_ZR)
-    zoom += 1.0f;
-  if ((held & HidNpadButton_ZL) && !S.aiming)
-    zoom -= 1.0f;
-  abs_lua_set_analog(rsx, rsy, zoom);
+  /* ---- camera: the right stick moves it along the level ---- */
+  abs_lua_set_analog(rsx, rsy, 0.0f);
   if (down & HidNpadButton_L) {
     /* the slingshot's view and the target's, in turn */
     S.cam_castle = !S.cam_castle;
@@ -342,11 +335,15 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   float m = sqrtf(sx * sx + sy * sy);
 
   /* ---- aiming ----
-   * Each step is its own update, so the game's Lua sees it as a phone's
-   * finger would be seen: the touch lands on the bird (select_bird hit-tests
-   * that spot), THEN the pull moves; the release happens where the last move
-   * left the bird. */
-  if (st->mode == ABS_MODE_AIM || S.aiming) {
+   * ZL prepares/tensions the bird in the slingshot.
+   * Left stick adjusts direction, angle and intensity.
+   * ZR (or A / X) fires the bird.
+   * B cancels the pull.
+   */
+  const int can_aim = (st->mode == ABS_MODE_AIM);
+  const int prepare = (held & HidNpadButton_ZL) || (down & HidNpadButton_ZL) || (m > 0.15f);
+
+  if (can_aim || S.aiming) {
     const float ox = st->sling_x >= 0 ? st->sling_x : st->bird_x;
     const float oy = st->sling_y >= 0 ? st->sling_y : st->bird_y;
     if (S.pending_up) {
@@ -356,10 +353,9 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       S.aiming = S.held = S.returning = S.pending_up = 0;
       return;
     }
-    if (!S.aiming && m > 0.0f && st->mode == ABS_MODE_AIM && !S.real_touch) {
+    if (!S.aiming && prepare && can_aim && !S.real_touch) {
       if (st->bird_x < 0 || st->bird_y < 0 || st->bird_x > abs_surface_w() || st->bird_y > abs_surface_h()) {
-        /* the camera is away from the slingshot: back to it first (a touch
-         * can only take a bird it sees) */
+        /* the camera is away from the slingshot: back to it first */
         u64 now = armGetSystemTick();
         if (armTicksToNs(now - S.cam_back_at) > 600000000ull) {
           S.cam_back_at = now;
@@ -371,14 +367,15 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       /* grab the bird where it sits; the pull starts next update */
       syn_down(st->bird_x, st->bird_y);
       S.aiming = 1;
-      S.held = S.returning = 0;
+      S.held = 1;
+      S.returning = 0;
       S.ax = S.ay = 0;
       return;
     }
     if (S.aiming) {
-      if (down & k_a) {
-        /* launch from where the bird is now (under the cancel limit the
-         * game would put it back: then keep aiming) */
+      const u64 fire_btn = HidNpadButton_ZR | HidNpadButton_X | k_a;
+      if (down & fire_btn) {
+        /* launch from where the bird is now */
         if (sqrtf(S.ax * S.ax + S.ay * S.ay) * BAND_MAX > BAND_CANCEL) {
           syn_up();
           S.aiming = S.held = S.returning = S.pending_up = 0;
@@ -387,26 +384,23 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       } else if (down & k_b) {
         aim_release_cancel();
       }
-      if (m > 0.0f && !S.returning) {
-        /* the stick's travel covers the pulls that fire: just past the
-         * cancel limit up to a full stretch */
+      if (m > 0.05f && !S.returning) {
+        /* stick travel controls pull direction and intensity */
         const float lo = (BAND_CANCEL + 0.15f) / BAND_MAX, hi = 1.02f;
         float want = lo + (hi - lo) * m;
         float tx = sx / m * want, ty = sy / m * want;
-        if (held & HidNpadButton_ZL) {
-          /* precision: the stick nudges the aim */
-          S.ax += sx * 0.01f * cfg->aim_speed;
-          S.ay += sy * 0.01f * cfg->aim_speed;
-          S.held = 1;
-        } else {
-          S.ax += (tx - S.ax) * 0.55f;
-          S.ay += (ty - S.ay) * 0.55f;
-          S.held = 0;
+        S.ax += (tx - S.ax) * 0.55f;
+        S.ay += (ty - S.ay) * 0.55f;
+        S.held = 1;
+      } else if (S.returning) {
+        S.ax *= 0.5f, S.ay *= 0.5f;
+        if (fabsf(S.ax) < 0.02f && fabsf(S.ay) < 0.02f) {
+          /* at the slingshot: lift next update, under the cancel limit */
+          S.ax = S.ay = 0;
+          syn_move(ox, oy);
+          S.pending_up = 1;
+          return;
         }
-      } else if (m > 0.0f && S.returning && !(down & k_b)) {
-        S.returning = 0; /* the stick again: aiming again */
-      } else if (!S.held) {
-        S.returning = 1;
       }
       /* fine aim with the D-pad: angle and power of the shot */
       int du = !!(down & HidNpadButton_Up) - !!(down & HidNpadButton_Down);
@@ -430,16 +424,6 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
         S.ax = cosf(ang) * len, S.ay = sinf(ang) * len;
         S.held = 1;
       }
-      if (S.returning) {
-        S.ax *= 0.5f, S.ay *= 0.5f;
-        if (fabsf(S.ax) < 0.02f && fabsf(S.ay) < 0.02f) {
-          /* at the slingshot: lift next update, under the cancel limit */
-          S.ax = S.ay = 0;
-          syn_move(ox, oy);
-          S.pending_up = 1;
-          return;
-        }
-      }
       syn_move(ox + S.ax * R, oy + S.ay * R);
       return;
     }
@@ -454,10 +438,11 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     S.cam_castle = 1;
     abs_lua_command(ABS_CMD_CAMERA_CASTLE);
   }
+  const u64 fire_btn = HidNpadButton_ZR | HidNpadButton_X | k_a;
   if (st->mode == ABS_MODE_FLIGHT && st->special == 2) {
     /* a bird in the air whose power is aimed (the Lazer bird's dash, the
      * Iron bird's egg, the Pink bird's beam): the left stick moves the
-     * cursor from where the bird was, A uses the power there */
+     * cursor from where the bird was, ZR / X / A uses the power there */
     if (!S.pcur) {
       S.pcur = 1;
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
@@ -465,7 +450,7 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       abs_cursor_aim_start(on ? st->bird_x : W * 0.5f, on ? st->bird_y : H * 0.55f);
     }
     abs_cursor_aim(lsx, lsy);
-    if (down & k_a) {
+    if (down & fire_btn) {
       float x, y;
       abs_cursor_pos(&x, &y);
       syn_tap(x, y);
@@ -473,7 +458,7 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     }
     return;
   }
-  if (down & k_a) {
+  if (down & fire_btn) {
     /* a bird in the air: its power. Otherwise a tap on the scene (tutorial
      * notes, skipping the camera tour) */
     syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.55f);
@@ -973,14 +958,13 @@ void abs_input_update(void) {
 
   const int in_level =
       st.mode == ABS_MODE_AIM || st.mode == ABS_MODE_FLIGHT || st.mode == ABS_MODE_WAIT || S.aiming;
-  /* R: the controls, in a level (in the menus the right stick brings the
-   * cursor out whenever it is wanted) */
-  if ((down & HidNpadButton_R) && in_level)
+  /* R: activate / deactivate mouse cursor anytime (in menus or in levels) */
+  if (down & HidNpadButton_R)
     set_scheme(S.scheme == ABS_SCHEME_CURSOR ? ABS_SCHEME_CONSOLE : ABS_SCHEME_CURSOR);
 
-  /* the cursor in a level: chosen; anywhere, when the script cannot see the
-   * game; in the menus, when config.ini turns the ring off */
-  cursor = (in_level && S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() || (!in_level && !dcr_config()->menu_focus);
+  /* the cursor: in cursor mode; when the script cannot see the game;
+   * in the menus, when config.ini turns the ring off */
+  cursor = (S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() || (!in_level && !dcr_config()->menu_focus);
   if (cursor) {
     S.focus_on = 0;
     S.mcursor = 0;
