@@ -1127,29 +1127,71 @@ end
 
 -- ------------------------------------------------------ free purchases
 -- The store is long gone and the port is offline, so every purchase is
--- granted the way the store's answer would grant it. iap/Payment.lua asks
--- native.CloudPayment to buy, and the store answers by calling
--- native.CloudPayment.onProductPurchased(productId): Payment.lua's own
--- closure, which gives the product's reward (eagles, powerups, an episode)
--- and announces EID_IAP_PURCHASE_COMPLETED. Here buyProduct answers that
--- way on the next update, and the price the shop shows is "FREE".
+-- granted the way the store's answer would grant it. In Angry Birds Star
+-- Wars II, characters and bundles cost Bird Coins or IAP. SettingsWrapper
+-- tracks coin balances, unlocked episodes, and unlocked unlimited
+-- characters. iap.lua handles coin purchases via native_buyItem and
+-- addCoins. Here we grant 999999 coins, unlock unlimited characters and
+-- episodes, and fulfill every IAP immediately as FREE.
 local pending_buys = {}
 
 local function free_purchases()
-  local P = (type(iap) == 'table' and iap.Payment) or (type(Payment) == 'table' and Payment)
-  if type(P) == 'table' and not P.__abs_free then
-    P.__abs_free = true
-    P.buyProduct = function(id)
-      pending_buys[#pending_buys + 1] = id
+  -- Star Wars II SettingsWrapper hooks
+  if type(SettingsWrapper) == 'table' and not SettingsWrapper.__abs_hooked then
+    SettingsWrapper.__abs_hooked = true
+
+    local orig_getAmount = SettingsWrapper.getAmount
+    SettingsWrapper.getAmount = function(self, id)
+      if id == 'coins' then
+        local v = orig_getAmount and orig_getAmount(self, id)
+        return math.max(v or 0, 999999)
+      end
+      if type(id) == 'string' and sfind(id, '_unlimited') then
+        return 1
+      end
+      local v = orig_getAmount and orig_getAmount(self, id)
+      return math.max(v or 0, 99)
     end
-    P.getPrice = function() return 'FREE' end
-    P.isInitialized = function() return true end
-    P.requireLogin = function(ok)
-      if type(ok) == 'function' then ok() end
+
+    if type(SettingsWrapper.isEpisodePurchased) == 'function' then
+      SettingsWrapper.isEpisodePurchased = function() return true end
+    end
+    if type(SettingsWrapper.getPurchase) == 'function' then
+      SettingsWrapper.getPurchase = function() return true end
+    end
+    if type(SettingsWrapper.isPayingCustomer) == 'function' then
+      SettingsWrapper.isPayingCustomer = function() return true end
+    end
+    if type(SettingsWrapper.isAdsRemoved) == 'function' then
+      SettingsWrapper.isAdsRemoved = function() return true end
+    end
+    if type(SettingsWrapper.isDarkSideOpen) == 'function' then
+      SettingsWrapper.isDarkSideOpen = function() return true end
+    end
+    if type(SettingsWrapper.isOppositeSideCharactersEnabled) == 'function' then
+      SettingsWrapper.isOppositeSideCharactersEnabled = function() return true end
     end
   end
-  if type(iap) == 'table' and not iap.__abs_free then
-    iap.__abs_free = true
+
+  -- Star Wars II iap table hooks
+  if type(iap) == 'table' and not iap.__abs_hooked then
+    iap.__abs_hooked = true
+    iap.native_isInitialized = function() return true end
+    iap.native_isIapAllowed = function() return true end
+
+    local catalog = {
+      { id = 'coins_1', price = 'FREE', clientData = { coins = 1000 } },
+      { id = 'coins_2', price = 'FREE', clientData = { coins = 2500 } },
+      { id = 'coins_3', price = 'FREE', clientData = { coins = 6000 } },
+      { id = 'coins_4', price = 'FREE', clientData = { coins = 15000 } },
+      { id = 'coins_5', price = 'FREE', clientData = { coins = 40000 } },
+      { id = 'coins_6', price = 'FREE', clientData = { coins = 100000 } },
+    }
+    iap.native_catalog = function() return catalog end
+
+    iap.native_buyItem = function(id)
+      pending_buys[#pending_buys + 1] = id
+    end
     if type(iap.buyProduct) == 'function' then
       iap.buyProduct = function(id)
         pending_buys[#pending_buys + 1] = id
@@ -1159,17 +1201,62 @@ local function free_purchases()
       iap.getPrice = function() return 'FREE' end
     end
   end
-  if type(settings) == 'table' then
-    for k, v in pairs(settings) do
-      if type(k) == 'string' and sfind(slower(k), 'coin') and type(v) == 'number' then
-        if v < 999999 then settings[k] = 999999 end
-      end
+
+  -- Hook global purchaseCoins
+  if type(purchaseCoins) == 'function' and not purchaseCoins.__abs_hooked then
+    local orig_purchaseCoins = purchaseCoins
+    purchaseCoins = function(id)
+      pending_buys[#pending_buys + 1] = id
+    end
+    purchaseCoins.__abs_hooked = true
+  end
+
+  -- Ensure coins balance is topped up via iap.addCoins
+  if type(iap) == 'table' and type(iap.addCoins) == 'function' then
+    local cur = 0
+    if type(SettingsWrapper) == 'table' and type(SettingsWrapper.getAmount) == 'function' then
+      pcall(function() cur = SettingsWrapper:getAmount('coins') or 0 end)
+    end
+    if cur < 999999 then
+      pcall(iap.addCoins, 999999 - cur)
     end
   end
-  if type(g_gamePurchasesTable) == 'table' then
-    for k, v in pairs(g_gamePurchasesTable) do
-      if type(v) == 'table' and v.purchased ~= nil then
-        v.purchased = true
+
+  -- Unlock episodes & game purchases
+  if type(g_gamePurchasesTable) == 'table' and type(g_gamePurchasesTable.root) == 'table' and not g_gamePurchasesTable.__abs_free then
+    g_gamePurchasesTable.__abs_free = true
+    setmetatable(g_gamePurchasesTable.root, {
+      __index = function(t, k) return true end
+    })
+  end
+  if type(g_episodePurchasesTable) == 'table' and type(g_episodePurchasesTable.root) == 'table' and not g_episodePurchasesTable.__abs_free then
+    g_episodePurchasesTable.__abs_free = true
+    setmetatable(g_episodePurchasesTable.root, {
+      __index = function(t, k) return true end
+    })
+  end
+
+  -- Settings flags
+  if type(settings) == 'table' and type(settings.root) == 'table' then
+    settings.root.adsRemoved = true
+    settings.root.isPayingCustomer = true
+    settings.root.androidPremium = true
+    settings.root.oppositeSideCharactersEnabledForDarkSide = true
+    settings.root.oppositeSideCharactersEnabledForLightSide = true
+  end
+
+  -- Unlock all characters with unlimited uses
+  if type(Characters) == 'table' and type(Characters.list) == 'table' and type(SettingsWrapper) == 'table' and not Characters.__abs_unlocked then
+    Characters.__abs_unlocked = true
+    for charName, _ in pairs(Characters.list) do
+      if type(charName) == 'string' then
+        if type(SettingsWrapper.addAmount) == 'function' then
+          pcall(SettingsWrapper.addAmount, SettingsWrapper, charName .. '_unlimited', 1)
+          pcall(SettingsWrapper.addAmount, SettingsWrapper, charName, 99)
+        end
+        if type(SettingsWrapper.setPurchase) == 'function' then
+          pcall(SettingsWrapper.setPurchase, SettingsWrapper, charName .. '_unlimited')
+        end
       end
     end
   end
@@ -1181,12 +1268,21 @@ local function grant_pending()
   pending_buys = {}
   local CP = type(native) == 'table' and native.CloudPayment
   for _, id in ipairs(list) do
+    if type(iap) == 'table' and type(iap.lua_onLocalPurchaseSucceeded) == 'function' then
+      pcall(iap.lua_onLocalPurchaseSucceeded, id)
+    end
+    if type(iap) == 'table' and type(iap.addCoins) == 'function' then
+      pcall(iap.addCoins, 50000)
+    end
     if CP and type(CP.onProductPurchased) == 'function' then
       pcall(CP.onProductPurchased, id)
     end
     if type(eventManager) == 'table' and type(eventManager.notify) == 'function' then
       local eid = (type(events) == 'table' and events.EID_IAP_PURCHASE_COMPLETED) or 'EID_IAP_PURCHASE_COMPLETED'
       pcall(eventManager.notify, eventManager, { id = eid, productId = id })
+      pcall(eventManager.notify, eventManager, { id = (events and events.EID_POP_FRAME) or 'EID_POP_FRAME' })
+      pcall(eventManager.notify, eventManager, { id = (events and events.EID_PURCHASE_CALLBACK_RECEIVED) or 'EID_PURCHASE_CALLBACK_RECEIVED' })
+      pcall(eventManager.notify, eventManager, { id = (events and events.EID_REFRESH_COIN_AMOUNT) or 'EID_REFRESH_COIN_AMOUNT', change = 'ADD' })
     end
   end
 end
