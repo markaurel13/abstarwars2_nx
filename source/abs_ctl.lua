@@ -1136,7 +1136,7 @@ end
 local pending_buys = {}
 
 local function free_purchases()
-  local P = type(iap) == 'table' and iap.Payment
+  local P = (type(iap) == 'table' and iap.Payment) or (type(Payment) == 'table' and Payment)
   if type(P) == 'table' and not P.__abs_free then
     P.__abs_free = true
     P.buyProduct = function(id)
@@ -1157,6 +1157,20 @@ local function free_purchases()
     end
     if type(iap.getPrice) == 'function' then
       iap.getPrice = function() return 'FREE' end
+    end
+  end
+  if type(settings) == 'table' then
+    for k, v in pairs(settings) do
+      if type(k) == 'string' and sfind(slower(k), 'coin') and type(v) == 'number' then
+        if v < 999999 then settings[k] = 999999 end
+      end
+    end
+  end
+  if type(g_gamePurchasesTable) == 'table' then
+    for k, v in pairs(g_gamePurchasesTable) do
+      if type(v) == 'table' and v.purchased ~= nil then
+        v.purchased = true
+      end
     end
   end
 end

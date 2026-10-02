@@ -973,14 +973,14 @@ void abs_input_update(void) {
 
   const int in_level =
       st.mode == ABS_MODE_AIM || st.mode == ABS_MODE_FLIGHT || st.mode == ABS_MODE_WAIT || S.aiming;
-  /* R: the controls, in a level (in the menus the right stick brings the
-   * cursor out whenever it is wanted) */
-  if ((down & HidNpadButton_R) && in_level)
+  /* R: switch controls anytime (in menus or in levels) */
+  if (down & HidNpadButton_R)
     set_scheme(S.scheme == ABS_SCHEME_CURSOR ? ABS_SCHEME_CONSOLE : ABS_SCHEME_CURSOR);
 
-  /* the cursor in a level: chosen; anywhere, when the script cannot see the
-   * game; in the menus, when config.ini turns the ring off */
-  cursor = (in_level && S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() || (!in_level && !dcr_config()->menu_focus);
+  /* the cursor: in cursor mode; when the script cannot see the game;
+   * when menu_focus is turned off; or in menus when no buttons are detected */
+  cursor = (S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() ||
+           (!in_level && !dcr_config()->menu_focus) || (!in_level && st.nbuttons == 0);
   if (cursor) {
     S.focus_on = 0;
     S.mcursor = 0;
