@@ -104,6 +104,10 @@ static struct {
   int down;
   float x, y;
   int up_next;  /* a tap: lift it on the next update */
+  /* a multi-frame swipe: x0→x1 over 'frames' updates */
+  int swipe_frames;   /* frames remaining (0 = no swipe) */
+  int swipe_total;    /* total frames for this swipe */
+  float swipe_x0, swipe_x1, swipe_y0, swipe_y1;
 } g_syn;
 
 static void syn_down(float x, float y) {
@@ -132,6 +136,19 @@ static void syn_up(void) {
 static void syn_tap(float x, float y) {
   syn_down(x, y);
   g_syn.up_next = 1;
+}
+
+/* start a multi-frame swipe (x0,y0 -> x1,y1, over n frames) */
+static void syn_swipe_start(float x0, float x1, float y0, float y1, int frames) {
+  if (g_syn.down) { /* cancel any current touch first */ syn_up(); }
+  g_syn.swipe_frames = frames;
+  g_syn.swipe_total  = frames;
+  g_syn.swipe_x0 = x0;
+  g_syn.swipe_x1 = x1;
+  g_syn.swipe_y0 = y0;
+  g_syn.swipe_y1 = y1;
+  /* fire first event now */
+  syn_down(x0, y0);
 }
 
 /* synthetic horizontal swipe for menu/world navigation removed */
@@ -657,6 +674,10 @@ static void back_press(const AbsLuaState *st) {
 static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float lsy, float rsx, float rsy, u64 k_a,
                   u64 k_b) {
   const int carousel = st->carousel;
+  if (down & (k_a | k_b | HidNpadButton_ZL | HidNpadButton_ZR))
+    debugPrintf("[input] menu press: A=%d B=%d ZL=%d ZR=%d n=%d sig=%s carousel=%d\n",
+                !!(down & k_a), !!(down & k_b), !!(down & HidNpadButton_ZL),
+                !!(down & HidNpadButton_ZR), st->nbuttons, st->sig, carousel);
 
   /* R toggles the mouse cursor: right stick does not auto-activate it */
   const u64 dpad = HidNpadButton_Up | HidNpadButton_Down | HidNpadButton_Left | HidNpadButton_Right;
@@ -678,24 +699,72 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
 
   /* ZL and ZR: scroll worlds/pages horizontally with swipe and page commands */
   int spin_ms = SPIN_MS;
+  const int is_carousel = carousel || st->is_ep_sel;
   if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZL)) {
-    abs_lua_command(carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_LEFT, spin_ms) : ABS_CMD_PAGE_PREV);
-    if (!carousel)
-      S.repage = armGetSystemTick();
+    if (st->is_ep_sel && !carousel) {
+      /* ABSW2 EpisodeSelection: no Lua carousel -- inject a multi-frame horizontal swipe */
+      const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
+      const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f;
+      debugPrintf("[input] ep_sel swipe LEFT\n");
+      syn_swipe_start(cx - dx, cx + dx, cy, cy, 10);  /* left-to-right = next episode (ZL inverted) */
+    } else {
+      abs_lua_command(is_carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_LEFT, spin_ms) : ABS_CMD_PAGE_PREV);
+      if (!is_carousel)
+        S.repage = armGetSystemTick();
+    }
   }
   if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZR)) {
-    abs_lua_command(carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_RIGHT, spin_ms) : ABS_CMD_PAGE_NEXT);
-    if (!carousel)
-      S.repage = armGetSystemTick();
+    if (st->is_ep_sel && !carousel) {
+      /* ABSW2 EpisodeSelection: no Lua carousel -- inject a multi-frame horizontal swipe */
+      const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
+      const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f;
+      debugPrintf("[input] ep_sel swipe RIGHT\n");
+      syn_swipe_start(cx + dx, cx - dx, cy, cy, 10);  /* right-to-left = previous episode (ZR inverted) */
+    } else {
+      abs_lua_command(is_carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_RIGHT, spin_ms) : ABS_CMD_PAGE_NEXT);
+      if (!is_carousel)
+        S.repage = armGetSystemTick();
+    }
   }
   if ((down & HidNpadButton_Plus) && st->mode == ABS_MODE_PAUSED)
     abs_lua_command(ABS_CMD_PAUSE);
 
-  /* a direction: the D-pad (left stick is disabled in menus) */
+  /* a direction: D-pad or Left Stick with repeat */
   float dx = 0, dy = 0;
   if (down & dpad) {
     dx = (float)(!!(held & HidNpadButton_Right) - !!(held & HidNpadButton_Left));
     dy = (float)(!!(held & HidNpadButton_Down) - !!(held & HidNpadButton_Up));
+  } else {
+    int sd = 0;
+    if (lsx * lsx + lsy * lsy > 0.45f * 0.45f) {
+      float a = atan2f(-lsy, lsx); /* screen axes */
+      sd = 1 + ((int)lroundf(a / 0.78539816f) + 8) % 8;
+    }
+    u64 now = armGetSystemTick();
+    if (sd && S.nav_dir == 9) {
+      /* still the push that brought the ring back */
+    } else if (sd && (sd != S.nav_dir || now >= S.nav_next)) {
+      float a = (float)(sd - 1) * 0.78539816f;
+      dx = roundf(cosf(a)), dy = roundf(sinf(a));
+      int spin = is_carousel && S.fkind == ABS_ITEM_CENTRE && dy == 0;
+      u64 wait;
+      if (sd != S.nav_dir) {
+        S.nav_since = now;
+        wait = spin ? SPIN_FIRST_NS : 350000000ull;
+      } else if (spin) {
+        const u64 h = armTicksToNs(now - S.nav_since);
+        wait = h >= SPIN_RAMP_NS ? SPIN_FAST_NS
+                                 : SPIN_FIRST_NS - (SPIN_FIRST_NS - SPIN_FAST_NS) * h / SPIN_RAMP_NS;
+        int ms = (int)(armTicksToNs(now - S.nav_last) / 500000ull);
+        spin_ms = ms < 200 ? 200 : ms > 400 ? 400 : ms;
+      } else {
+        wait = 140000000ull;
+      }
+      S.nav_last = now;
+      S.nav_next = now + armNsToTicks(wait);
+    }
+    if (!sd || S.nav_dir != 9)
+      S.nav_dir = sd;
   }
   int dir = (dx != 0 || dy != 0) && !returned;
   if (dir || (down & k_a)) {
@@ -709,7 +778,7 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
 
   if (st->nbuttons <= 0 || !st->sig[0] || !strcmp(st->sig, "busy")) {
     S.focus_on = 0;
-    if ((down & k_a) && st->nbuttons <= 0 && strcmp(st->sig, "busy"))
+    if ((down & k_a) && (st->is_ep_sel || (st->nbuttons <= 0 && strcmp(st->sig, "busy"))))
       syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.5f); /* nothing known to press: the middle */
     if (down & k_b)
       back_press(st);
@@ -824,8 +893,14 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
         S.repage = armGetSystemTick();
       }
     }
-    if (n >= 0)
+    if (n >= 0) {
       focus_set(st, n);
+      if (!st->buttons[n].vis) {
+        float cx = abs_surface_w() * 0.5f, cy = abs_surface_h() * 0.5f;
+        if (dy > 0) syn_swipe_start(cx, cx, cy * 1.5f, cy * 0.5f, 10);
+        if (dy < 0) syn_swipe_start(cx, cx, cy * 0.5f, cy * 1.5f, 10);
+      }
+    }
   }
   if (down & k_a) {
     debugPrintf("[input] A pressed in menu: id=%d, vis=%d, kind=%d, ax=%f, ay=%f\n", S.fitem.id, S.fitem.vis, S.fitem.kind, S.fitem.ax, S.fitem.ay);
@@ -873,6 +948,22 @@ void abs_input_update(void) {
   const u64 k_a = dcr_config()->swap_ab ? HidNpadButton_B : HidNpadButton_A;
   const u64 k_b = dcr_config()->swap_ab ? HidNpadButton_A : HidNpadButton_B;
   int cursor = 0;
+
+  /* advance any pending multi-frame swipe */
+  if (g_syn.swipe_frames > 0) {
+    g_syn.swipe_frames--;
+    float t = (g_syn.swipe_total > 1)
+              ? (float)(g_syn.swipe_total - g_syn.swipe_frames) / (float)g_syn.swipe_total
+              : 1.0f;
+    float x = g_syn.swipe_x0 + (g_syn.swipe_x1 - g_syn.swipe_x0) * t;
+    float y = g_syn.swipe_y0 + (g_syn.swipe_y1 - g_syn.swipe_y0) * t;
+    if (g_syn.swipe_frames == 0) {
+      syn_move(x, y);
+      syn_up();
+    } else {
+      syn_move(x, y);
+    }
+  }
 
   if (g_syn.up_next) {
     g_syn.up_next = 0;
@@ -934,7 +1025,8 @@ void abs_input_update(void) {
 
   /* the cursor: in cursor mode; when the script cannot see the game;
    * in the menus, when config.ini turns the ring off */
-  cursor = (S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() || (!in_level && !dcr_config()->menu_focus);
+  cursor = (S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() ||
+           (!in_level && !dcr_config()->menu_focus);
   if (cursor) {
     S.focus_on = 0;
     S.mcursor = 0;

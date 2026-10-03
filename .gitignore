@@ -29,3 +29,9 @@
 .DS_Store
 *.swp
 *~
+launcher/debug.log
+*.patch
+*.orig
+*.rej
+filter_test.lua
+get_syn_nav.py

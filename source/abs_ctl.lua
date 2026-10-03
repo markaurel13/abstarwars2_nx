@@ -70,19 +70,21 @@ local function call(f, a, b)
   return nil
 end
 
+local captured_env
+
 local function link_gamelua()
-  if _G.__abs_gamelua then return end
+  if captured_env then return end
   local g = rawget(_G, 'gamelua')
   if type(g) == 'table' then
-    _G.__abs_gamelua = g
-  elseif not _G.__abs_gamelua then
+    captured_env = g
+  else
     for i = 2, 7 do
       local ok, f = pcall(getfenv, i)
       if ok and type(f) == 'table' and (f.menuManager or f.g_inMainMenu or f.levelName) then
-        _G.__abs_gamelua = f
+        captured_env = f
         print("[lua] found game environment in call stack at level " .. i .. "!")
         local s = "[GAMELUA_GLOBALS] "
-        for k, v in pairs(_G.__abs_gamelua) do 
+        for k, v in pairs(captured_env) do 
           s = s .. tostring(k) .. ":" .. type(v) .. " " 
           if #s > 500 then
             print(s)
@@ -91,18 +93,18 @@ local function link_gamelua()
         end
         if #s > 20 then print(s) end
 
-        if type(f.menuManager) == 'table' then
+        if type(captured_env.menuManager) == 'table' then
           local sm = "[MENUMANAGER_KEYS] "
-          for k, v in pairs(f.menuManager) do
+          for k, v in pairs(captured_env.menuManager) do
             sm = sm .. tostring(k) .. ":" .. type(v) .. " "
             if #sm > 500 then print(sm); sm = "[MENUMANAGER_KEYS] " end
           end
           if #sm > 20 then print(sm) end
         end
 
-        if type(f.MenuManager) == 'table' then
+        if type(captured_env.MenuManager) == 'table' then
           local sm = "[CAPITAL_MENUMANAGER_KEYS] "
-          for k, v in pairs(f.MenuManager) do
+          for k, v in pairs(captured_env.MenuManager) do
             sm = sm .. tostring(k) .. ":" .. type(v) .. " "
             if #sm > 500 then print(sm); sm = "[CAPITAL_MENUMANAGER_KEYS] " end
           end
@@ -113,14 +115,14 @@ local function link_gamelua()
     end
   end
 
-  if not _G.__abs_gamelua and frame_no == 100 then
+  if not captured_env and frame_no == 100 then
     local s = "[LUA_GLOBALS_100] "
     for k, v in pairs(_G) do s = s .. tostring(k) .. ":" .. type(v) .. " " end
     print(s)
   end
 
-  if _G.__abs_gamelua then
-    local env = _G.__abs_gamelua
+  if captured_env then
+    local env = captured_env
     setmetatable(_G, {
       __index = env,
       __newindex = function(t, k, v)
@@ -167,8 +169,14 @@ local popup_open
 -- child first, skipping children that are not visible and active, and stops
 -- at the first that answers.
 local function menu_manager()
+  local env = captured_env
+  local system = type(env) == 'table' and env.GameSystem or nil
+  if type(system) ~= 'table' and type(GameSystem) == 'table' then system = GameSystem end
+  if type(system) == 'table' and type(system.menuManager) == 'table' then return system.menuManager end
+  if type(env) == 'table' and type(env.menuManager) == 'table' then return env.menuManager end
   if type(menuManager) == 'table' then return menuManager end
-  if type(gamelua) == 'table' and type(gamelua.menuManager) == 'table' then return gamelua.menuManager end
+  local g = type(gamelua) == 'function' and gamelua() or type(gamelua) == 'table' and gamelua or nil
+  if type(g) == 'table' and type(g.menuManager) == 'table' then return g.menuManager end
   if type(MenuManager) == 'table' then return MenuManager end
   if type(g_menuManager) == 'table' then return g_menuManager end
   if type(GameSystem) == 'table' and type(GameSystem.menuManager) == 'table' then return GameSystem.menuManager end
@@ -176,31 +184,27 @@ local function menu_manager()
 end
 
 local function base_frame()
+  local env = captured_env
+  local g = type(gamelua) == 'function' and gamelua() or type(gamelua) == 'table' and gamelua or nil
   local r = nil
   if type(rootFrame) == 'table' then r = rootFrame
-  elseif type(gamelua) == 'table' and type(gamelua.rootFrame) == 'table' then r = gamelua.rootFrame
+  elseif type(env) == 'table' and type(env.rootFrame) == 'table' then r = env.rootFrame
+  elseif type(env) == 'table' and type(env.baseFrame) == 'table' then r = env.baseFrame
+  elseif type(g) == 'table' and type(g.rootFrame) == 'table' then r = g.rootFrame
   elseif type(g_rootFrame) == 'table' then r = g_rootFrame
   elseif type(baseFrame) == 'table' then r = baseFrame
-  elseif type(gamelua) == 'table' and type(gamelua.baseFrame) == 'table' then r = gamelua.baseFrame
+  elseif type(g) == 'table' and type(g.baseFrame) == 'table' then r = g.baseFrame
   elseif type(g_baseFrame) == 'table' then r = g_baseFrame
   else
     local mm = menu_manager()
     if mm then
       if type(mm._baseFrame) == 'table' then r = mm._baseFrame
       elseif type(mm.rootFrame) == 'table' then r = mm.rootFrame
-      elseif type(mm.currentRoot) == 'table' then r = mm.currentRoot
       elseif type(mm.getRoot) == 'function' then
         local ok, res = pcall(mm.getRoot, mm)
         if ok and type(res) == 'table' then r = res end
       end
-    end
-  end
-  if frame_no % 60 == 0 then 
-    if r == nil and type(menu_manager()) == 'table' then
-      local mm = menu_manager()
-      -- debug removed
-    elseif type(r) == 'table' then
-      -- debug removed
+      if r == nil and type(mm.currentRoot) == 'table' then r = mm.currentRoot end
     end
   end
   return r
@@ -216,10 +220,29 @@ local function live(f)
   return type(f) == 'table' and f.visible ~= false and f.active ~= false
 end
 
+local function method_of(f, name)
+  if type(f) ~= 'table' then return nil end
+  local v = rawget(f, name)
+  if type(v) == 'function' then return v end
+  local m = getmetatable(f)
+  for _ = 1, 12 do
+    if type(m) ~= 'table' then return nil end
+    v = rawget(m, name)
+    if type(v) == 'function' then return v end
+    local index = rawget(m, '__index')
+    if type(index) == 'table' then
+      v = rawget(index, name)
+      if type(v) == 'function' then return v end
+    end
+    m = getmetatable(m)
+  end
+  return nil
+end
+
 -- a frame that answers pointer events itself (a button of some kind)
 local function handles(f, base)
-  if type(f.onClick) == 'function' or type(f.onRelease) == 'function' then return true end
-  local h = f.onPointerEvent
+  if method_of(f, 'onClick') or method_of(f, 'onRelease') then return true end
+  local h = method_of(f, 'onPointerEvent')
   return type(h) == 'function' and h ~= base
 end
 
@@ -233,7 +256,7 @@ local function modal(f, base)
   if not handles(f, base) then return false end
   local c = probes[f]
   if c and frame_no - c.t < 60 then return c.r end
-  local ok, r = pcall(f.onPointerEvent, f, 'ABS_PROBE', -100000, -100000)
+  local ok, r = pcall(method_of(f, 'onPointerEvent'), f, 'ABS_PROBE', -100000, -100000)
   r = (ok and r) and true or false
   probes[f] = {t = frame_no, r = r}
   return r
@@ -305,8 +328,26 @@ local function box(f, ps, pys)
   return nil
 end
 
-local items, nitems, big
+local items, nitems, big, focused_light_locked, focused_dark_locked, focused_light_id, focused_dark_id
 local MAXB = 48
+local ui_debug_done = false
+local ui_debug_attempts = 0
+
+local function debug_ui_tree(f, depth, limit, base)
+  if type(f) ~= 'table' or depth > 3 or limit.n <= 0 then return end
+  limit.n = limit.n - 1
+  local ch = f.children
+  local h = method_of(f, 'onPointerEvent')
+  print(sfmt('[ui-debug] d=%d name=%s w=%s h=%s children=%d click=%s release=%s pointer=%s base=%s', depth,
+            tostring(f.name), tostring(f.w), tostring(f.h), type(ch) == 'table' and #ch or 0,
+            method_of(f, 'onClick') and 'yes' or 'no', method_of(f, 'onRelease') and 'yes' or 'no',
+            h and 'yes' or 'no', h == base and 'yes' or 'no'))
+  if type(ch) == 'table' then
+    for i = #ch, 1, -1 do
+      debug_ui_tree(ch[i], depth + 1, limit, base)
+    end
+  end
+end
 
 -- stable ids for the frames seen (weak: a frame that goes, goes); the planet
 -- in the middle is 1
@@ -329,6 +370,7 @@ local seen, seen_next = {}, {}
 local function add_item(x, y, w, h, ax, ay, kind, shape, prio, id, grp, vis)
   if nitems >= MAXB then return end
   local sw, sh = screen_w(), screen_h()
+  if frame_no % 60 == 0 then print(sfmt("[add_item] x=%.1f y=%.1f w=%.1f h=%.1f kind=%d", x, y, w, h, kind)) end
   nitems = nitems + 1
   items[nitems] = sfmt('%.4f %.4f %.4f %.4f %.4f %.4f %d %d %d %d %d %d', x / sw, y / sh, w / sw, h / sh,
                        ax / sw, ay / sh, kind, shape, prio, id, grp or 0, vis or 1)
@@ -441,6 +483,25 @@ local function undrawn(f)
   return type(LB) == 'table' and f.setupDrawBatches == rawget(LB, 'setupDrawBatches')
 end
 
+local function is_locked_side_btn(f)
+  local name = type(f.name) == 'string' and f.name or ''
+  if name == 'lightSideButton' or name == 'darkSideButton' then
+    local ch = f.children
+    if type(ch) == 'table' then
+      for i=1, #ch do
+        local c = ch[i]
+        local cname = type(c.name) == 'string' and c.name or ''
+        if cname == 'lightSideLockIcon' or cname == 'darkSideLockIcon' then
+           if c.visible ~= false and not (num(c.alpha) and c.alpha <= 0.05) then
+              return true
+           end
+        end
+      end
+    end
+  end
+  return false
+end
+
 -- Collect the buttons under f, topmost first; ox, oy = where f's coordinate
 -- space starts on screen, ps/pys = the scale of f's ancestors, sf = the
 -- scrolling frame f is in. Returns whether f (or a frame in it) takes every
@@ -477,20 +538,55 @@ collect = function(f, ox, oy, ps, pys, depth, clip, base, sf, grp)
     end
   end
   if handles(f, base) then
+    if type(f.name) == 'string' and f.name ~= 'bg' and f.name ~= 'background' and not string.find(f.name, 'Button') and not string.find(f.name, 'shop') then
+      -- print(sfmt('[btn-debug] handles f.name=%s', f.name))
+    end
     local x, y, w, h = box(f, ps, pys)
     if x then
       x, y = ox + x, oy + y
       if w * h >= big then blocks = true end
-      if nitems == before and w * h < big and f.enabled ~= false and not (num(f.alpha) and f.alpha <= 0.05) and
-         not undrawn(f) then
-        local round = (w / h > 0.8 and w / h < 1.25) and 1 or 0
-        local vis = inside(clip, x + w * 0.5, y + h * 0.5) and 1 or 0
-        -- a level button: on the screen when its page is
-        local page = ls_now and ls_page_of(f)
-        if page then vis = page == ls_now and 1 or 0 end
-        local id = id_of(f)
-        seen_next[id] = {f = f, sf = sf, x0 = x, y0 = y, x1 = x + w, y1 = y + h, grp = grp, page = page}
-        add_item(x, y, w, h, x + w * 0.5, y + h * 0.5, KIND_BUTTON, round, prio_of(f), id, grp, vis)
+      -- The shop scroll frame is big but we still want its tab buttons
+      local nm = type(f.name) == 'string' and f.name or ''
+      if nm == 'scrollFrame_characterMenuShop' then blocks = false end
+      -- Some shop tab buttons are marked 'disabled' but are still tappable
+      local force_enabled = (nm == 'carboniteButton' or nm == 'giftButton' or
+                             nm == 'currencyShopButton' or
+                             sfind(nm, 'offerButton', 1, true))
+      if nitems == before and w * h < big and (f.enabled ~= false or force_enabled) and
+         not (num(f.alpha) and f.alpha <= 0.05) and
+         not undrawn(f) and not sfind(nm, 'BLOCK_MENU_EPISODE_BUTTON', 1, true) then
+        local is_small_side = (nm == 'lightSideButton' or nm == 'darkSideButton') and w <= 100
+        -- Flying ships in the main menu are banners of exactly ~198.8×51.8; skip them specifically
+        local in_mm_screen = (type(captured_env) == 'table' and captured_env.levelName == 'MainMenu')
+        local is_mm_ship = in_mm_screen and (w > 175 and w < 225 and h > 40 and h < 65)
+        if not is_small_side and not is_mm_ship then
+          local round = (w / h > 0.8 and w / h < 1.25) and 1 or 0
+          local vis = inside(clip, x + w * 0.5, y + h * 0.5) and 1 or 0
+          -- a level button: on the screen when its page is
+          local page = ls_now and ls_page_of(f)
+          if page then vis = page == ls_now and 1 or 0 end
+          local id = id_of(f)
+          if type(f.name) == 'string' then
+            if f.name == 'lightSideButton' and w > 100 then
+              focused_light_locked = is_locked_side_btn(f)
+              focused_light_id = id
+            elseif f.name == 'darkSideButton' and w > 100 then
+              focused_dark_locked = is_locked_side_btn(f)
+              focused_dark_id = id
+            end
+          end
+          seen_next[id] = {f = f, sf = sf, x0 = x, y0 = y, x1 = x + w, y1 = y + h, grp = grp, page = page}
+          add_item(x, y, w, h, x + w * 0.5, y + h * 0.5, KIND_BUTTON, round, prio_of(f), id, grp, vis)
+        end
+      else
+        if type(f.name) == 'string' and f.name ~= 'bg' then
+          local cond = ""
+          if w * h >= big then cond = cond .. " big" end
+          if f.enabled == false then cond = cond .. " disabled" end
+          if num(f.alpha) and f.alpha <= 0.05 then cond = cond .. " alpha" end
+          if undrawn(f) then cond = cond .. " undrawn" end
+          -- print('[btn-debug] skipped ' .. f.name .. ' due to:' .. cond .. ' x=' .. x .. ' y=' .. y)
+        end
       end
     end
   end
@@ -654,8 +750,12 @@ local function within(f, g)
 end
 
 local function find_episode_page(f, depth)
-  if depth > 6 or not live(f) then return nil end
-  if type(f._entityEpisodeMapping) == 'table' then return f end
+  if depth > 10 or not live(f) then return nil end
+  if type(f._entityEpisodeMapping) == 'table' or type(f._positionMapping) == 'table' or
+     f._currentAnchor ~= nil or f.name == 'EpisodeSelection' or f.name == 'episodeSelection' or
+     f.name == 'EpicSelection' or f.name == 'epicSelection' then
+    return f
+  end
   local ch = f.children
   if type(ch) == 'table' then
     for i = #ch, 1, -1 do
@@ -970,18 +1070,27 @@ end
 
 local function buttons()
   items, nitems = {}, 0
+  focused_light_locked = false
+  focused_dark_locked = false
+  focused_light_id = -1
+  focused_dark_id = -1
   big = screen_w() * screen_h() * 0.7
   sig_frame = nil
   seen_next = {}
   local mm = menu_manager()
-  if mm and (mm.sceneChanging == true or mm.allowInput == false) then
-    return 0, '', 'busy', nil, 0
-  end
   local b = base_frame()
+
+  -- removed debug prints for brevity
+
   local page = b and find_episode_page(b, 0)
   local okp, lp = pcall(ls_page_now)
   ls_now = okp and lp or nil
-  if b then pcall(collect, b, 0, 0, 1, 1, 0, nil, base_handler(), nil, nil) end
+  if b then
+    local ok, err = pcall(collect, b, 0, 0, 1, 1, 0, nil, base_handler(), nil, nil)
+    if not ok and captured_env and frame_no % 60 == 0 then
+      print(sfmt('[btn-debug] collect ERROR: %s', tostring(err)))
+    end
+  end
   -- the planets, when the episode page is what takes the touches: nothing
   -- blocks, or only the page or its scene (full screen, it takes every
   -- touch), not a popup on top
@@ -992,12 +1101,55 @@ local function buttons()
     local ok, r = pcall(planets, page)
     if ok then carousel = r end
   end
+  -- ABSW2 fallback: manually inject KIND_CENTRE if on episode selection screen
+  local ln = type(captured_env) == 'table' and captured_env.levelName
+  if type(ln) == 'string' and (ln == 'EpisodeSelection' or sfind(ln, 'pisodeSel', 1, true) or
+                               ln == 'WorldSelection' or sfind(ln, 'orldSel', 1, true)) then
+    if focused_light_locked and focused_dark_locked then
+      -- Fully locked planet: remove both side buttons and add center big padlock
+      local new_items = {}
+      local new_n = 0
+      for i=1, nitems do
+        local id = -1
+        local count = 0
+        for w in string.gmatch(items[i], "%S+") do
+          count = count + 1
+          if count == 10 then id = tonumber(w); break end
+        end
+        if id ~= focused_light_id and id ~= focused_dark_id then
+          new_n = new_n + 1
+          new_items[new_n] = items[i]
+        end
+      end
+      items = new_items
+      nitems = new_n
+      
+      local sw, sh = screen_w(), screen_h()
+      local cx, cy = sw * 0.5, sh * 0.5
+      -- add_item(x, y, w, h, ax, ay, kind, shape, prio, id, grp, vis)
+      add_item(cx - 50, cy - 50, 100, 100, cx, cy, KIND_CENTRE, 9, 1, 9999, 0, 1)
+    end
+  end
   seen = seen_next
   local sig = sig_frame and ssub(tostring(sig_frame), 8) or 'none'
   sig = sig:gsub('%s', '')
   if sig == '' then sig = 'none' end
+
+  -- debug: print when in menu but no items found
+  if captured_env and frame_no % 60 == 0 then
+    if nitems == 0 then
+      print(sfmt('[btn-debug] WARNING: 0 buttons after collect, sig=%s carousel=%d', sig, carousel))
+    else
+      print(sfmt('[btn-debug] collected %d items, sig=%s carousel=%d', nitems, sig, carousel))
+      for i=1,nitems do
+        print(sfmt('[btn-debug]   item[%d]: %s', i, items[i]))
+      end
+    end
+  end
+
   return nitems, concat(items, ' ', 1, nitems), sig, page, carousel
 end
+
 
 -- a visible button whose returnValue / name / image mentions `word`
 local function find_button(f, ox, oy, ps, pys, word, depth, base)
@@ -1204,8 +1356,6 @@ local function camera(px, py, z)
       -- z > 0 is DOWN on the joystick. We want DOWN to zoom OUT (alejar), so factor > 1.0.
       local factor = 1.0 + z * 0.015
       local new_cz = cz * factor
-      
-      print("[zoom_debug] RightStick z=" .. tostring(z) .. " currentZoomedScale=" .. tostring(gc.currentZoomedScale) .. " animationWorldScale=" .. tostring(gc.animationWorldScale) .. " animationWorldScale2=" .. tostring(gc.animationWorldScale2))
       
       -- Clamp the zoom scale safely between reasonable bounds
       new_cz = math.max(0.01, math.min(10.0, new_cz))
@@ -1892,14 +2042,21 @@ local function level_on_top()
   local timer = g_levelTimer
   if timer == nil and type(gamelua) == 'table' then timer = gamelua.g_levelTimer end
 
+  -- If g_inMainMenu is explicitly true, we are in the main menu: never treat as in-level
+  if in_mm == true then return false end
+
   if in_mm == false and cbn ~= nil then return true end
-  if type(timer) == 'number' then return true end
+  -- g_levelTimer is always a number in ABSW2 even on the main menu, so guard:
+  -- only treat it as a level-active signal when g_inMainMenu is not true and timer > 0
+  if in_mm ~= true and type(timer) == 'number' and timer > 0 then return true end
 
   local mm = menu_manager()
   local root = base_frame()
   if not root then return false end
   local hud = call(root.getChild, root, 'gameHud')
-  if hud and hud.visible ~= false then return true end
+  -- gameHud exists in ABSW2 but may not be truly active in menus; only trust it when
+  -- g_inMainMenu is not true
+  if in_mm ~= true and hud and hud.visible ~= false then return true end
   return false
 end
 
@@ -2112,8 +2269,44 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local ln = levelName or (type(gamelua) == 'table' and gamelua.levelName) or cls
 
   local ingame = false
-  if (hud_active == true) or (in_gameplay == true) or level_on_top() then
+  -- g_inMainMenu is the most authoritative signal: if it's true, we are in the main menu.
+  -- Don't let hud_active / in_gameplay / level_on_top() override it.
+  if in_mm ~= true and ((hud_active == true) or (in_gameplay == true) or level_on_top()) then
     ingame = true
+  end
+
+  -- debug: show ingame-detection variables once per second
+  if captured_env and frame_no % 60 == 0 then
+    local timer_v = g_levelTimer or (type(gamelua) == 'table' and gamelua.g_levelTimer)
+    local ln_v = levelName or (type(gamelua) == 'table' and gamelua.levelName) or '?'
+    print(sfmt('[frame-debug] ingame=%s in_mm=%s hud_active=%s in_gameplay=%s lot=%s timer=%s ln=%s',
+               tostring(ingame), tostring(in_mm), tostring(hud_active),
+               tostring(in_gameplay), tostring(level_on_top()), tostring(timer_v), tostring(ln_v)))
+  end
+
+  if ingame then
+    -- Detect episode/world selection screen: levelName matches a selection pattern,
+    -- or no bird is present and find_episode_page finds the carousel.
+    -- In this case treat the screen as a menu so ZL/ZR carousel spin and A/B work.
+    local is_sel_screen = false
+    if type(ln) == 'string' then
+      is_sel_screen = (ln == 'EpisodeSelection' or ln == 'WorldSelection' or
+                       ln == 'LevelSelection' or
+                       ln == 'EpisodeSelectionScene' or ln == 'WorldSelectionScene' or
+                       sfind(ln, 'pisodeSel', 1, true) or sfind(ln, 'orldSel', 1, true) or
+                       sfind(ln, 'evelSel', 1, true) or
+                       sfind(ln, 'pisodeScen', 1, true))
+    end
+    if not is_sel_screen and cbn == nil then
+      -- No bird in slingshot: maybe a world/episode screen. Check for episode page.
+      local b_sel = base_frame()
+      if b_sel and find_episode_page(b_sel, 0) then
+        is_sel_screen = true
+      end
+    end
+    if is_sel_screen then
+      ingame = false  -- treat as menu mode so ZL/ZR and focus ring work
+    end
   end
 
   if ingame then
@@ -2250,7 +2443,42 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       local b = base_frame()
       page = b and find_episode_page(b, 0)
     end
-    spin(page, cmd == CMD_SPIN_LEFT and 'LEFT' or 'RIGHT', cmd_arg > 0 and cmd_arg / 1000 or nil)
+    if page then
+      spin(page, cmd == CMD_SPIN_LEFT and 'LEFT' or 'RIGHT', cmd_arg > 0 and cmd_arg / 1000 or nil)
+    elseif type(ln) == 'string' and (ln == 'EpisodeSelection' or sfind(ln, 'pisodeSel', 1, true) or
+                                     ln == 'WorldSelection' or sfind(ln, 'orldSel', 1, true)) then
+      -- ABSW2 EpisodeSelection: no Lua carousel object -- do a horizontal swipe gesture
+      -- The C runtime's abs_input_syn() injects: down, move, up
+      -- We queue a swipe request via the request() mechanism
+      -- Direction: LEFT swipe means moving left (previous world), ZL = prev
+      local swipe_dx = cmd == CMD_SPIN_LEFT and -320 or 320
+      local cx, cy = sw * 0.5, sh * 0.5
+      -- Use __abs interface to directly call syn_move sequence if available,
+      -- otherwise request a swipe via tx/ty mechanism
+      local ok_swipe = false
+      local sabs = type(__abs) == 'table' and __abs
+      if sabs and type(sabs.syn) == 'function' then
+        -- phase 0=down, 2=move, 1=up
+        pcall(sabs.syn, 0, cx, cy)
+        pcall(sabs.syn, 2, cx + swipe_dx * 0.5, cy)
+        pcall(sabs.syn, 2, cx + swipe_dx, cy)
+        pcall(sabs.syn, 1, cx + swipe_dx, cy)
+        ok_swipe = true
+        print(sfmt('[ep-debug] swipe via __abs.syn dir=%s dx=%d', cmd == CMD_SPIN_LEFT and 'LEFT' or 'RIGHT', swipe_dx))
+      end
+      if not ok_swipe then
+        -- Fallback: use onKeyEvent if the base frame supports it
+        local b2 = base_frame()
+        if b2 and type(b2.onKeyEvent) == 'function' then
+          pcall(b2.onKeyEvent, b2, 'PRESS', cmd == CMD_SPIN_LEFT and 'LEFT' or 'RIGHT')
+          ok_swipe = true
+          print('[ep-debug] swipe via onKeyEvent')
+        end
+      end
+      if not ok_swipe then
+        print('[ep-debug] swipe fallback: no method available')
+      end
+    end
   elseif cmd == CMD_PAGE_NEXT or cmd == CMD_PAGE_PREV then
     local b = base_frame()
     local pg = b and find_pager(b, 0)
@@ -2273,9 +2501,17 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local okv, a, b2, c2, d2 = pcall(popup_vrect)
   if okv and a then vx, vy, vw, vh = a / sw, b2 / sh, c2 / sw, d2 / sh end
 
+  local is_ep_sel_v = (page ~= nil or
+               ln == 'EpisodeSelection' or ln == 'EpisodeSelectionScene' or
+               ln == 'WorldSelection' or ln == 'WorldSelectionScene' or
+               (type(ln) == 'string' and sfind(ln, 'pisodeSel', 1, true)) or
+               (type(ln) == 'string' and sfind(ln, 'orldSel', 1, true))) and 1 or 0
+  if is_ep_sel_v == 1 and frame_no % 60 == 0 then
+    print(sfmt('[ep-debug] is_ep_sel=1 ln=%s page=%s carousel=%d', tostring(ln), tostring(page), carousel))
+  end
   return sfmt('%d %d %.1f %.1f %d %.4f %.4f %.4f %.4f %.4f %d %d %.4f %.4f %s %s %.3f %d %.4f %.4f %.4f %.4f %d %d %d %s',
               game, mode, sw, sh, ready, bx, by, lx, ly, pullr, aiming, special, tx, ty, sig, r,
-              num(time) or -1, mmf, vx, vy, vw, vh, carousel, levelName == 'EpisodeSelection' and 1 or 0, nb, list)
+              num(time) or -1, mmf, vx, vy, vw, vh, carousel, is_ep_sel_v, nb, list)
 end
 
 -- what the last scan saw, for debug.log ([debug] log_lua)
