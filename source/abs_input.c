@@ -223,9 +223,7 @@ static struct {
   u64 nav_last;    /* ... and moved the focus (or turned the carousel) last at */
   u64 hidden_since; /* the focus went to an item off the screen (its page is turning) */
   u64 turn_since;   /* a level-selection page has been turning since */
-  u64 repage;       /* ZL/ZR (or a push past the last item) turned the page: the focus follows */
-  int repage_dir;   /* 1 for next page (ZR), -1 for prev page (ZL) */
-  int repage_panning_seen;
+  u64 repage; int repage_dir;       /* ZL/ZR (or a push past the last item) turned the page: the focus follows */
   /* restart hold */
   u64 x_since;
   u64 launch_time;
@@ -396,7 +394,7 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   static int a_was_down = 0;
   int intro_wait = st->intro;
   
-  if (intro_wait) {
+  if (intro_wait && !S.aiming) {
     if ((down & k_a) && !a_was_down) {
       syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.5f);
       debugPrintf("[input] intro: A pressed -> tapping screen to skip natively\n");
@@ -404,7 +402,7 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   }
   a_was_down = (down & k_a);
 
-  const int can_aim = (st->mode == ABS_MODE_AIM || st->mode == ABS_MODE_WAIT) && !intro_wait;
+  const int can_aim = (st->mode == ABS_MODE_AIM || st->mode == ABS_MODE_WAIT);
   
   if (can_aim || S.aiming) {
     const float bx = st->bird_x >= 0 ? st->bird_x : (st->sling_x >= 0 ? st->sling_x : abs_surface_w() * 0.24f);
@@ -813,8 +811,7 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     } else {
       abs_lua_command(is_carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_LEFT, spin_ms) : ABS_CMD_PAGE_PREV);
       if (!is_carousel) {
-        S.repage = armGetSystemTick();
-        S.repage_dir = -1;
+        S.repage = armGetSystemTick(); S.repage_dir = -1;
       }
     }
   }
@@ -828,8 +825,7 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     } else {
       abs_lua_command(is_carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_RIGHT, spin_ms) : ABS_CMD_PAGE_NEXT);
       if (!is_carousel) {
-        S.repage = armGetSystemTick();
-        S.repage_dir = 1;
+        S.repage = armGetSystemTick(); S.repage_dir = 1;
       }
     }
   }
@@ -889,7 +885,6 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       dir = 0; /* Ignore D-pad to allow the camera pan to start */
     } else {
       S.repage = 0; /* User manually overriding a stalled turn */
-      S.repage_panning_seen = 0;
     }
   }
   if (dir || (down & k_a)) {
@@ -939,51 +934,54 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   /* the page was turned from under the focus (ZL/ZR): once it rests, the
    * focus comes onto it, to the item nearest where it was */
   if (S.repage) {
-    if (st->mm & 16) {
-      S.repage_panning_seen = 1;
-    }
     const u64 now = armGetSystemTick();
     if (armTicksToNs(now - S.repage) > 3000000000ull) {
       S.repage = 0;
-      S.repage_panning_seen = 0;
-    } else if (S.repage_panning_seen && armTicksToNs(now - S.repage) > 200000000ull && !strcmp(st->sig, S.sig)) {
-      const float W = abs_surface_w(), H = abs_surface_h();
-      float target_x = S.fx;
-      float target_y = S.fy;
-      if (S.repage_dir == 1) {
-        target_x = 0.0f; 
-        target_y = H * 0.25f;
-      } else if (S.repage_dir == -1) {
-        target_x = W;
-        target_y = H * 0.75f;
-      }
-      
-      const float x = target_x < 0 ? 0 : target_x > W ? W : target_x;
-      const float y = target_y < 0 ? 0 : target_y > H ? H : target_y;
-      
-      int n = -1;
-      float bd = 1e18f;
-      for (int i = 0; i < st->nbuttons; i++) {
-        const AbsItem *it = &st->buttons[i];
-        if (!(K_FOCUSABLE & K(it->kind)) || !it->vis)
-          continue;
-        if (icy(it) < H * 0.15f || icy(it) > H * 0.85f)
-          continue;
-        if (S.repage_dir == 1 && icx(it) < W * 0.8f)
-          continue;
-        if (S.repage_dir == -1 && icx(it) > W * 0.2f)
-          continue;
-        float ddx = icx(it) - x, ddy = (icy(it) - y) * 1.5f;
-        float d = ddx * ddx + ddy * ddy;
-        if (d < bd)
-          bd = d, n = i;
-      }
-      if (n >= 0) {
-        focus_set(st, n);
-        S.moved = 1;
-        S.repage = 0;
-        S.repage_dir = 0;
-        S.repage_panning_seen = 0;
+    } else if (S.focus_on && !strcmp(st->sig, S.sig)) {
+      if (armTicksToNs(now - S.repage) > 200000000ull) {
+        const float W = abs_surface_w(), H = abs_surface_h();
+        int n = -1;
+        float bd = 1e18f;
+        for (int i = 0; i < st->nbuttons; i++) {
+          const AbsItem *it = &st->buttons[i];
+          if (!(K_FOCUSABLE & K(it->kind)) || !it->vis)
+            continue;
+          if (icy(it) < H * 0.15f || icy(it) > H * 0.85f)
+            continue;
+          if (S.repage_dir == 1 && icx(it) < W * 0.8f)
+            continue;
+          if (S.repage_dir == -1 && icx(it) > W * 0.2f)
+            continue;
+          float target_x = (S.repage_dir == 1) ? W : 0.0f;
+          float target_y = S.fy;
+          float ddx = icx(it) - target_x;
+          float ddy = (icy(it) - target_y) * 1.5f;
+          float d = ddx * ddx + ddy * ddy;
+          if (d < bd)
+            bd = d, n = i;
+        }
+        if (n >= 0) {
+          focus_set(st, n);
+          S.moved = 1;
+          S.repage = 0;
+        } else if (!(st->mm & 16)) {
+          /* Fallback when pan finishes completely but still nothing found (e.g. edge case) */
+          const float x = S.fx < 0 ? 0 : S.fx > W ? W : S.fx, y = S.fy < 0 ? 0 : S.fy > H ? H : S.fy;
+          for (int i = 0; i < st->nbuttons; i++) {
+            const AbsItem *it = &st->buttons[i];
+            if (!(K_FOCUSABLE & K(it->kind)) || !it->vis)
+              continue;
+            float ddx = icx(it) - x, ddy = icy(it) - y;
+            float d = ddx * ddx + ddy * ddy;
+            if (d < bd)
+              bd = d, n = i;
+          }
+          if (n >= 0) {
+            focus_set(st, n);
+            S.moved = 1;
+          }
+          S.repage = 0;
+        }
       }
     }
   }
@@ -1012,16 +1010,21 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   }
 
   if (S.force_first_level && !strncmp(st->sig, "LevelS", 6) && st->nbuttons > 0) {
-    int first_idx = -1;
+    const float W = abs_surface_w();
+    int best_idx = -1;
     float min_ax = 1e18f;
     for (int j = 0; j < st->nbuttons; j++) {
-        if (st->buttons[j].round == 1 && st->buttons[j].ax < min_ax) {
-            min_ax = st->buttons[j].ax;
-            first_idx = j;
+        const AbsItem *it = &st->buttons[j];
+        if (it->round && it->vis) {
+            float cx = icx(it);
+            if (cx > W * 0.1f && cx < W * 0.9f && it->ax < min_ax) {
+                min_ax = it->ax;
+                best_idx = j;
+            }
         }
     }
-    if (first_idx >= 0) {
-        focus_set(st, first_idx);
+    if (best_idx >= 0) {
+        focus_set(st, best_idx);
         S.moved = 1;
         S.force_first_level = 0;
     }
@@ -1087,14 +1090,11 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       }
       if (n < 0 && !carousel && dy == 0) {
         abs_lua_command(dx < 0 ? ABS_CMD_PAGE_PREV : ABS_CMD_PAGE_NEXT);
-        S.repage = armGetSystemTick();
-        S.repage_dir = dx < 0 ? -1 : 1;
+        S.repage = armGetSystemTick(); S.repage_dir = dx < 0 ? -1 : 1;
       }
     }
     if (n >= 0) {
       S.repage = 0;
-      S.repage_dir = 0;
-      S.repage_panning_seen = 0;
       focus_set(st, n);
       if (!st->buttons[n].vis) {
         float cx = abs_surface_w() * 0.5f, cy = abs_surface_h() * 0.5f;
@@ -1280,7 +1280,7 @@ void abs_input_update(void) {
   abs_cursor_style((S.pcur || (cursor && in_level && st.special == 2)) ? ABS_CURSOR_POINT
                    : in_level                                            ? ABS_CURSOR_LEVEL
                                                                          : ABS_CURSOR_MENU);
-  abs_lua_set_focus(S.focus_on && !S.mcursor && !cursor ? S.fitem.id : 0);
+  abs_lua_set_focus(S.focus_on && !S.mcursor && !cursor && !S.touch_mode ? S.fitem.id : 0);
   S.carousel = st.carousel;
 
 publish:

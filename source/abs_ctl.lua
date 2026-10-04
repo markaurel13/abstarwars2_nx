@@ -270,6 +270,7 @@ end
 -- how good a first focus a button is (Prompt's check is 'close_button' with
 -- the image BTN_CHECK; ConfirmPrompt's no is BTN_X)
 PRIO = {
+  {'telepod', 99}, {'egg', 99},
   {'btn_check', 9}, {'check', 9}, {'proceed', 8}, {'play', 8}, {'next', 8}, {'continue', 8},
   {'resume', 8}, {'confirm', 8}, {'accept', 8}, {'_ok', 8}, {'watch', 8}, {'yes', 7}, {'restart', 5},
   {'btn_x', 1}, {'back', 1}, {'shop', 1}, {'facebook', 0},
@@ -383,7 +384,7 @@ seen, seen_next = {}, {}
 local function add_item(x, y, w, h, ax, ay, kind, shape, prio, id, grp, vis)
   if nitems >= MAXB then return end
   local sw, sh = screen_w(), screen_h()
-  if frame_no % 60 == 0 then print(sfmt("[add_item] x=%.1f y=%.1f w=%.1f h=%.1f kind=%d", x, y, w, h, kind)) end
+  if frame_no % 60 == 0 then print(sfmt("[add_item] x=%.1f y=%.1f w=%.1f h=%.1f kind=%d prio=%d", x, y, w, h, kind, prio)) end
   nitems = nitems + 1
   items[nitems] = sfmt('%.4f %.4f %.4f %.4f %.4f %.4f %d %d %d %d %d %d', x / sw, y / sh, w / sw, h / sh,
                        ax / sw, ay / sh, kind, shape, prio, id, grp or 0, vis or 1)
@@ -559,7 +560,7 @@ collect = function(f, ox, oy, ps, pys, depth, clip, base, sf, grp)
       if w * h >= big then blocks = true end
       -- The shop scroll frame is big but we still want its tab buttons
       local nm = type(f.name) == 'string' and f.name or ''
-      if nm == 'scrollFrame_characterMenuShop' then blocks = false end
+      if nm == 'scrollFrame_characterMenuShop' then blocks = false; g_shop_frame_detected = true end
       -- Some shop tab buttons are marked 'disabled' but are still tappable
       local force_enabled = (nm == 'carboniteButton' or nm == 'giftButton' or
                              nm == 'currencyShopButton' or
@@ -1152,6 +1153,7 @@ end
 
 local function buttons()
   items, nitems = {}, 0
+  g_shop_frame_detected = false
   focused_light_locked = false
   focused_dark_locked = false
   focused_light_id = -1
@@ -1238,6 +1240,15 @@ local function buttons()
   end
 
   sig = ssub(ln_sig, 1, 6) .. '_' .. ep_sig .. '_' .. sig
+  if g_shop_frame_detected then
+      if sig_frame ~= _last_shop_sig_frame then
+          _last_shop_sig_frame = sig_frame
+          _shop_open_count = (_shop_open_count or 0) + 1
+      end
+      sig = tostring(_shop_open_count) .. '_' .. sig
+  else
+      _last_shop_sig_frame = nil
+  end
   sig = ssub(sig, 1, 23)
   if sig == '' then sig = 'none' end
 
@@ -2511,15 +2522,15 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       end
       
       -- Evaluate visibility BEFORE fallbacks destroy the coordinates
-      check_x = (raw_bx ~= nil) and raw_bx or raw_lx
+      check_x = raw_lx
       slingshot_visible = false
       if check_x ~= nil and check_x >= -0.05 and check_x <= 1.05 then
         slingshot_visible = true
       end
       
-      -- Determine if we are in intro/panning state based solely on visibility
-      intro_st = (not slingshot_visible) and (mode == MODE_AIM or mode == MODE_WAIT)
-      if intro_st then ready = 2 end
+      local sb = selectedBird or (type(gamelua) == 'table' and gamelua.selectedBird)
+      local bsa = birdSpecialtyAvailable or (type(gamelua) == 'table' and gamelua.birdSpecialtyAvailable)
+      aiming = (sb ~= nil) and 1 or 0
       
       -- FALLBACK: If bx < 0 (bird coordinates not resolved from world), but slingshot lx, ly is known:
       if bx < 0 and lx >= 0 then
@@ -2530,11 +2541,6 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
         if bx < 0 then bx, by = lx, ly end
       end
       if pullr <= 0 then pullr = 0.15 end
-
-      local sb = selectedBird or (type(gamelua) == 'table' and gamelua.selectedBird)
-      local bsa = birdSpecialtyAvailable or (type(gamelua) == 'table' and gamelua.birdSpecialtyAvailable)
-      aiming = (sb ~= nil) and 1 or 0
-
 
       special = (fb ~= nil and bsa == true) and 1 or 0
 
@@ -2550,13 +2556,36 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       end
 
       if (br == true or (br == nil and fb == nil and not ipi)) and bx >= 0 and special == 0 then
-        mode, ready = MODE_AIM, 1
+        mode = MODE_AIM
       elseif fb ~= nil and type(fb) == 'table' then
         mode = MODE_FLIGHT
       else
         mode = MODE_WAIT
       end
       if mode ~= MODE_FLIGHT and aiming == 1 then mode = MODE_AIM end
+
+      -- Determine if we are in intro/panning state
+      -- Determine if we are in intro/panning state
+      -- Rely strictly on check_x movement, because native cameraAnimationSlider can get stranded if interrupted!
+      local is_moving = false
+      local delta = 0
+      if g_abs_last_check_x and check_x then
+        delta = math.abs(g_abs_last_check_x - check_x)
+        if delta > 0.00005 then
+          is_moving = true
+        end
+      end
+      g_abs_last_check_x = check_x
+      
+      intro_st = (ipi or not slingshot_visible or is_moving) and (mode == MODE_AIM or mode == MODE_WAIT)
+      
+      if intro_st then 
+        ready = 2 
+      elseif mode == MODE_AIM then
+        ready = 1
+      end
+      
+      print(sfmt("[ready-debug] intro_st=%s vis=%s is_moving=%s delta=%.7f ipi=%s ready=%d", tostring(intro_st), tostring(slingshot_visible), tostring(is_moving), delta, tostring(ipi), ready))
 
       -- Level intro: if the slingshot is not visible (ready=2 set above), we log it
       do
@@ -2700,10 +2729,9 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local okv, a, b2, c2, d2 = pcall(popup_vrect)
   if okv and a then vx, vy, vw, vh = a / sw, b2 / sh, c2 / sw, d2 / sh end
 
-  local is_ep_sel_v = (page ~= nil or
+  print(sfmt("[ready-debug] intro_st=%s slingshot_visible=%s check_x=%s ready=%d", tostring(intro_st), tostring(slingshot_visible), tostring(check_x), ready)); local is_ep_sel_v = (page ~= nil or
                ln == 'EpisodeSelection' or ln == 'EpisodeSelectionScene' or
                ln == 'WorldSelection' or ln == 'WorldSelectionScene' or
-               ln == 'LevelSelection' or
                (type(ln) == 'string' and sfind(ln, 'pisodeSel', 1, true)) or
                (type(ln) == 'string' and sfind(ln, 'orldSel', 1, true))) and 1 or 0
   -- cutscene/comic (levelName like Chapter_1_light_Comic_1): 3 = A taps the screen
