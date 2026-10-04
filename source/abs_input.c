@@ -167,7 +167,7 @@ void abs_input_syn(int phase, float x, float y) {
 /* Called from abs_lua.c to do a one-page horizontal swipe for LevelSelection */
 void abs_input_swipe_h(int right) {
   const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
-  const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f; /* same as ZL/ZR: exactly one page */
+  const float cx = W * 0.5f, cy = H * 0.1f, dx = W * 0.28f; /* top of screen to avoid touching level nodes */
   if (right)
     syn_swipe_start(cx + dx, cx - dx, cy, cy, 10); /* right-to-left = advance */
   else
@@ -224,6 +224,8 @@ static struct {
   u64 hidden_since; /* the focus went to an item off the screen (its page is turning) */
   u64 turn_since;   /* a level-selection page has been turning since */
   u64 repage;       /* ZL/ZR (or a push past the last item) turned the page: the focus follows */
+  int repage_dir;   /* 1 for next page (ZR), -1 for prev page (ZL) */
+  int repage_panning_seen;
   /* restart hold */
   u64 x_since;
   u64 launch_time;
@@ -338,10 +340,6 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
                   u64 k_a, u64 k_b) {
   const DcrConfig *cfg = dcr_config();
   float cam_pan = rsx, cam_zoom = rsy;
-  if (held & HidNpadButton_Left) cam_pan = -1.0f;
-  if (held & HidNpadButton_Right) cam_pan = 1.0f;
-  if (held & HidNpadButton_Up) cam_zoom = 1.0f;
-  if (held & HidNpadButton_Down) cam_zoom = -1.0f;
   if (held & HidNpadButton_ZL) cam_pan = -1.0f;
   if (held & HidNpadButton_ZR) cam_pan = 1.0f;
   abs_lua_set_analog(cam_pan, 0.0f, cam_zoom);
@@ -398,7 +396,7 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   static int a_was_down = 0;
   int intro_wait = st->intro;
   
-  if (st->intro) {
+  if (intro_wait) {
     if ((down & k_a) && !a_was_down) {
       syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.5f);
       debugPrintf("[input] intro: A pressed -> tapping screen to skip natively\n");
@@ -809,26 +807,30 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     if (ep_sel && !carousel) {
       /* ABSW2 EpisodeSelection: no Lua carousel -- inject a multi-frame horizontal swipe */
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
-      const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f;
+      const float cx = W * 0.5f, cy = H * 0.1f, dx = W * 0.28f;
       debugPrintf("[input] ep_sel swipe LEFT\n");
       syn_swipe_start(cx - dx, cx + dx, cy, cy, 10);  /* left-to-right = next episode (ZL inverted) */
     } else {
       abs_lua_command(is_carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_LEFT, spin_ms) : ABS_CMD_PAGE_PREV);
-      if (!is_carousel)
+      if (!is_carousel) {
         S.repage = armGetSystemTick();
+        S.repage_dir = -1;
+      }
     }
   }
   if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZR)) {
     if (ep_sel && !carousel) {
       /* ABSW2 EpisodeSelection: no Lua carousel -- inject a multi-frame horizontal swipe */
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
-      const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f;
+      const float cx = W * 0.5f, cy = H * 0.1f, dx = W * 0.28f;
       debugPrintf("[input] ep_sel swipe RIGHT\n");
       syn_swipe_start(cx + dx, cx - dx, cy, cy, 10);  /* right-to-left = previous episode (ZR inverted) */
     } else {
       abs_lua_command(is_carousel ? ABS_CMD_ARG(ABS_CMD_SPIN_RIGHT, spin_ms) : ABS_CMD_PAGE_NEXT);
-      if (!is_carousel)
+      if (!is_carousel) {
         S.repage = armGetSystemTick();
+        S.repage_dir = 1;
+      }
     }
   }
   if ((down & HidNpadButton_Plus) && st->mode == ABS_MODE_PAUSED)
@@ -881,10 +883,20 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       S.nav_dir = sd;
   }
   int dir = (dx != 0 || dy != 0) && !returned;
+  if (dir && S.repage) {
+    u64 now = armGetSystemTick();
+    if (armTicksToNs(now - S.repage) < 200000000ull) {
+      dir = 0; /* Ignore D-pad to allow the camera pan to start */
+    } else {
+      S.repage = 0; /* User manually overriding a stalled turn */
+      S.repage_panning_seen = 0;
+    }
+  }
   if (dir || (down & k_a)) {
     if (S.touch_mode) {
       /* back from the touchscreen: show the focus first */
       S.touch_mode = 0;
+      S.focus_on = 1;
       dir = 0;
       down &= ~k_a;
     }
@@ -898,50 +910,81 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       back_press(st);
     return;
   }
+
   /* a level-selection page turning (abs_ctl.lua): the ring stays on its
    * level, followed by id as the page slides, and waits -- no push moves it,
    * and a screen that seems new for a moment mid-turn (a frame taking the
    * touches) does not take the focus, which would turn the page back. At
    * most 1.5 s. */
   if ((st->mm & 16) && S.focus_on) {
-    const u64 now = armGetSystemTick();
-    if (!S.turn_since)
-      S.turn_since = now;
-    if (armTicksToNs(now - S.turn_since) < 1500000000ull) {
-      for (int i = 0; i < st->nbuttons; i++)
-        if (S.fitem.id && st->buttons[i].id == S.fitem.id) {
-          focus_set(st, i);
-          break;
-        }
-      if (down & k_b)
-        back_press(st);
-      return;
+    for (int i = 0; i < st->nbuttons; i++) {
+      if (S.fitem.id && st->buttons[i].id == S.fitem.id) {
+        focus_set(st, i);
+        break;
+      }
     }
-  } else {
-    S.turn_since = 0;
   }
+
+  /* Always keep the focused item's visibility up to date */
+  if (S.fitem.id) {
+    S.fitem.vis = 0; /* assume invisible unless found */
+    for (int i = 0; i < st->nbuttons; i++) {
+      if (st->buttons[i].id == S.fitem.id) {
+        S.fitem.vis = st->buttons[i].vis;
+        break;
+      }
+    }
+  }
+
   /* the page was turned from under the focus (ZL/ZR): once it rests, the
    * focus comes onto it, to the item nearest where it was */
   if (S.repage) {
+    if (st->mm & 16) {
+      S.repage_panning_seen = 1;
+    }
     const u64 now = armGetSystemTick();
     if (armTicksToNs(now - S.repage) > 3000000000ull) {
       S.repage = 0;
-    } else if (S.focus_on && !S.fitem.vis && !(st->mm & 16) && !strcmp(st->sig, S.sig)) {
+      S.repage_panning_seen = 0;
+    } else if (S.repage_panning_seen && armTicksToNs(now - S.repage) > 200000000ull && !strcmp(st->sig, S.sig)) {
       const float W = abs_surface_w(), H = abs_surface_h();
-      const float x = S.fx < 0 ? 0 : S.fx > W ? W : S.fx, y = S.fy < 0 ? 0 : S.fy > H ? H : S.fy;
+      float target_x = S.fx;
+      float target_y = S.fy;
+      if (S.repage_dir == 1) {
+        target_x = 0.0f; 
+        target_y = H * 0.25f;
+      } else if (S.repage_dir == -1) {
+        target_x = W;
+        target_y = H * 0.75f;
+      }
+      
+      const float x = target_x < 0 ? 0 : target_x > W ? W : target_x;
+      const float y = target_y < 0 ? 0 : target_y > H ? H : target_y;
+      
       int n = -1;
       float bd = 1e18f;
       for (int i = 0; i < st->nbuttons; i++) {
         const AbsItem *it = &st->buttons[i];
         if (!(K_FOCUSABLE & K(it->kind)) || !it->vis)
           continue;
-        float ddx = icx(it) - x, ddy = icy(it) - y, d = ddx * ddx + ddy * ddy;
+        if (icy(it) < H * 0.15f || icy(it) > H * 0.85f)
+          continue;
+        if (S.repage_dir == 1 && icx(it) < W * 0.8f)
+          continue;
+        if (S.repage_dir == -1 && icx(it) > W * 0.2f)
+          continue;
+        float ddx = icx(it) - x, ddy = (icy(it) - y) * 1.5f;
+        float d = ddx * ddx + ddy * ddy;
         if (d < bd)
           bd = d, n = i;
       }
-      if (n >= 0)
+      if (n >= 0) {
         focus_set(st, n);
-      S.repage = 0;
+        S.moved = 1;
+        S.repage = 0;
+        S.repage_dir = 0;
+        S.repage_panning_seen = 0;
+      }
     }
   }
 
@@ -985,9 +1028,9 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   }
 
   int cur = S.focus_on ? refind(st) : -1;
-  if (cur >= 0)
+  if (cur >= 0) {
     focus_set(st, cur);
-  else {
+  } else if (!S.touch_mode && !S.repage) {
     cur = best_item(st);
     if (cur < 0) {
       if (down & (k_a | k_b))
@@ -995,11 +1038,15 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       return;
     }
     focus_set(st, cur);
+  } else {
+    /* Touch mode or repage active: preserve S.fitem so repage logic can track it going off-screen */
+    if (down & (k_a | k_b))
+      syn_tap((float)abs_surface_w() * 0.5f, (float)abs_surface_h() * 0.5f);
   }
   /* until the player moves it, the focus goes to a better first choice when
    * one shows up: the planet, found a few updates after the buttons; a
    * comic's check, which comes when the comic ends */
-  if (!S.moved) {
+  if (!S.moved && !S.touch_mode && !S.repage) {
     int b = best_item(st);
     if (b >= 0 && st->buttons[b].prio > S.fitem.prio)
       focus_set(st, b);
@@ -1021,7 +1068,6 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     S.force_first_level = 0;
     int n = -1;
     S.moved = 1;
-    S.repage = 0;
     if (carousel && S.fkind == ABS_ITEM_CENTRE && dy == 0) {
       abs_lua_command(ABS_CMD_ARG(dx < 0 ? ABS_CMD_SPIN_LEFT : ABS_CMD_SPIN_RIGHT, spin_ms));
     } else {
@@ -1042,9 +1088,13 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       if (n < 0 && !carousel && dy == 0) {
         abs_lua_command(dx < 0 ? ABS_CMD_PAGE_PREV : ABS_CMD_PAGE_NEXT);
         S.repage = armGetSystemTick();
+        S.repage_dir = dx < 0 ? -1 : 1;
       }
     }
     if (n >= 0) {
+      S.repage = 0;
+      S.repage_dir = 0;
+      S.repage_panning_seen = 0;
       focus_set(st, n);
       if (!st->buttons[n].vis) {
         float cx = abs_surface_w() * 0.5f, cy = abs_surface_h() * 0.5f;
