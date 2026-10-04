@@ -49,14 +49,14 @@ local sfind, slower, sfmt, ssub = string.find, string.lower, string.format, stri
 local concat = table.concat
 
 -- slingshot.lua's rubber band: full stretch, in physics units
-local MAX_LENGTH = 5.4
+MAX_LENGTH = 5.4
 
-local MODE_MENU, MODE_AIM, MODE_FLIGHT, MODE_WAIT, MODE_PAUSED, MODE_ENDED = 1, 2, 3, 4, 5, 6
-local AIMED_POWERS = {LASER = true, GRENADE = true, GRAVITY_DISRUPTOR = true} -- aimed where tapped
-local CMD_SLING, CMD_CASTLE, CMD_PAUSE, CMD_RESTART, CMD_EAGLE, CMD_PAGE_NEXT, CMD_PAGE_PREV,
+MODE_MENU, MODE_AIM, MODE_FLIGHT, MODE_WAIT, MODE_PAUSED, MODE_ENDED = 1, 2, 3, 4, 5, 6
+AIMED_POWERS = {LASER = true, GRENADE = true, GRAVITY_DISRUPTOR = true} -- aimed where tapped
+CMD_SLING, CMD_CASTLE, CMD_PAUSE, CMD_RESTART, CMD_EAGLE, CMD_PAGE_NEXT, CMD_PAGE_PREV,
       CMD_SPIN_LEFT, CMD_SPIN_RIGHT, CMD_POWERUPS, CMD_EPISODE_LIGHT, CMD_EPISODE_DARK = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-local FLAG_BUTTONS, FLAG_FREE, FLAG_INFO, FLAG_ONLINE, FLAG_KELLOGGS = 1, 2, 4, 8, 16
-local KIND_BUTTON, KIND_SIDE, KIND_CENTRE, KIND_LINK = 0, 1, 2, 3
+FLAG_BUTTONS, FLAG_FREE, FLAG_INFO, FLAG_ONLINE, FLAG_KELLOGGS = 1, 2, 4, 8, 16
+KIND_BUTTON, KIND_SIDE, KIND_CENTRE, KIND_LINK = 0, 1, 2, 3
 
 local function num(v)
   if type(v) == 'number' then return v end
@@ -269,7 +269,7 @@ end
 
 -- how good a first focus a button is (Prompt's check is 'close_button' with
 -- the image BTN_CHECK; ConfirmPrompt's no is BTN_X)
-local PRIO = {
+PRIO = {
   {'btn_check', 9}, {'check', 9}, {'proceed', 8}, {'play', 8}, {'next', 8}, {'continue', 8},
   {'resume', 8}, {'confirm', 8}, {'accept', 8}, {'_ok', 8}, {'watch', 8}, {'yes', 7}, {'restart', 5},
   {'btn_x', 1}, {'back', 1}, {'shop', 1}, {'facebook', 0},
@@ -328,10 +328,10 @@ local function box(f, ps, pys)
   return nil
 end
 
-local items, nitems, big, focused_light_locked, focused_dark_locked, focused_light_id, focused_dark_id
-local MAXB = 48
-local ui_debug_done = false
-local ui_debug_attempts = 0
+items, nitems, big, focused_light_locked, focused_dark_locked, focused_light_id, focused_dark_id = nil, nil, nil, nil, nil, nil, nil
+MAXB = 48
+ui_debug_done = false
+ui_debug_attempts = 0
 
 local function debug_ui_tree(f, depth, limit, base)
   if type(f) ~= 'table' or depth > 3 or limit.n <= 0 then return end
@@ -351,9 +351,22 @@ end
 
 -- stable ids for the frames seen (weak: a frame that goes, goes); the planet
 -- in the middle is 1
-local ids, next_id = setmetatable({}, {__mode = 'k'}), 10
+ids, next_id = setmetatable({}, {__mode = 'k'}), 10
+ls_world_ids = {}
 local function id_of(f)
   local i = ids[f]
+  if not i and levelName == 'LevelSelection' then
+    if type(f.name) == 'string' and f.name ~= '' then
+      i = ls_world_ids[f.name]
+      if not i then
+        i = next_id
+        next_id = next_id + 1
+        ls_world_ids[f.name] = i
+      end
+      ids[f] = i
+      return i
+    end
+  end
   if not i then
     i = next_id
     next_id = next_id + 1
@@ -364,7 +377,7 @@ end
 
 -- what the last scan saw of each item, by id: its frame, the scrolling frame
 -- it is in, its box (for bringing the focused item into view)
-local seen, seen_next = {}, {}
+seen, seen_next = {}, {}
 
 -- an item: x y w h ax ay kind shape prio id grp vis (fractions of the screen)
 local function add_item(x, y, w, h, ax, ay, kind, shape, prio, id, grp, vis)
@@ -384,7 +397,7 @@ local function inside(clip, x, y)
   return x >= l and x <= r and y >= t and y <= b
 end
 
-local sig_frame -- the topmost frame that takes every touch, this scan
+sig_frame = nil -- the topmost frame that takes every touch, this scan
 
 -- Is f an instance of class c (its metatable chain)?
 local function is_a(f, c)
@@ -410,7 +423,7 @@ end
 -- The main menu's two tabs (MainMenu: optionsSlider with its button
 -- optionsButton, rightSlider with rightSliderButton): an item's group, 2 or 4
 -- for inside the left or right tab, +1 for the tab's own button
-local GROUPS = {optionsSlider = 2, optionsButton = 3, rightSlider = 4, rightSliderButton = 5}
+GROUPS = {optionsSlider = 2, optionsButton = 3, rightSlider = 4, rightSliderButton = 5}
 
 -- Level selection's pages (levelName 'LevelSelection'): each is one of the
 -- level's cameras (originalCameras; camera.lua shows two at a time, pair
@@ -425,7 +438,7 @@ local function camera_settled()
 end
 -- Cameras at one place are one page (Fry Me to the Moon has two there, Froot
 -- Loops Bloopers seven): each camera's page is the first camera at its place.
-local ls_cams, ls_pages = nil, {}
+ls_cams, ls_pages = nil, {}
 local function ls_page_list()
   local cams = originalCameras
   if cams == ls_cams and #ls_pages == #cams then return ls_pages end
@@ -446,7 +459,7 @@ local function ls_page_list()
   end
   return ls_pages
 end
-local ls_now -- the page shown or being turned to, this scan (nil: not paged)
+ls_now = nil -- the page shown or being turned to, this scan (nil: not paged)
 local function ls_page_now()
   if levelName ~= 'LevelSelection' or type(originalCameras) ~= 'table' or #originalCameras < 2 then return nil end
   local cur = num(currentCamera)
@@ -508,7 +521,6 @@ end
 -- touch: then what is under it is hidden and not collected. Items outside
 -- the screen or their scrolling frame's clip (the next page of levels) are
 -- kept, marked not visible, so the focus can go to them.
-local collect
 collect = function(f, ox, oy, ps, pys, depth, clip, base, sf, grp)
   if depth > 16 or not live(f) then return false end
   grp = GROUPS[f.name] or grp
@@ -574,6 +586,9 @@ collect = function(f, ox, oy, ps, pys, depth, clip, base, sf, grp)
               focused_dark_locked = is_locked_side_btn(f)
               focused_dark_id = id
             end
+            if string.find(string.lower(f.name), "side") then
+              print("[btn-debug] SIDE FRAME: " .. f.name .. " w=" .. tostring(w))
+            end
           end
           seen_next[id] = {f = f, sf = sf, x0 = x, y0 = y, x1 = x + w, y1 = y + h, grp = grp, page = page}
           add_item(x, y, w, h, x + w * 0.5, y + h * 0.5, KIND_BUTTON, round, prio_of(f), id, grp, vis)
@@ -611,33 +626,81 @@ end
 -- and swung back, and in Omelettification went out past the first page and
 -- jumped back to it. At the first or the last page it stays. `right` is on
 -- the screen: the mirror world's pages run the other way.
-local last_flip = -100
-local cmd_focus -- the focus when ZL/ZR last turned a page: left behind
-local page_turn -- the turn under way (page_turn_update)
-local PAGE_SECS = 0.75
+g_abs_last_side = 'bird'
+last_flip = -100
+cmd_focus = nil -- the focus when ZL/ZR last turned a page: left behind
+page_turn = nil -- the turn under way (page_turn_update)
+ls_pan_dir = nil   -- swipe direction being animated
+ls_pan_frames = 0  -- how many frames the swipe has been in progress
+ls_pan_sig = nil     -- sum of item x0 last frame (camera-motion detector)
+ls_pan_still = 0     -- consecutive frames with no item movement
+last_flip_item = nil  -- id of item that triggered the last swipe (ping-pong guard)
+PAGE_SECS = 0.75
 local PAGE_SWEEP = 1e-4
-local function flip_page(right)
+-- reqs/request must be declared before flip_page so flip_page can call request()
+-- (Lua 5.1: locals are only in scope for functions declared after them)
+local reqs = {}
+local function request(r) reqs[#reqs + 1] = r end
+local function flip_page(right, item_id)
   if levelName ~= 'LevelSelection' then return false end
-  -- one turn at a time: the next once the last has come to rest (or a
-  -- finger's sweep, 300 updates at most)
-  if page_turn or frame_no - last_flip < 6 or (frame_no - last_flip < 300 and not camera_settled()) then return true end
+  if not item_id then _G._reveal_target = nil end
+  local settled = camera_settled()
+  local frames_since = frame_no - last_flip
+  -- Rate limit: one swipe per 90 frames (~1.5s).
+  if page_turn or frames_since < 90 then
+    print(sfmt('[flip_page] BLOCKED right=%s frames_since=%d', tostring(right), frames_since))
+    return true
+  end
+  -- Ping-pong guard: if the SAME item triggers swipes in BOTH directions, it's
+  -- sitting on the border between pages. Block and redirect focus away from it.
+  if item_id and item_id == last_flip_item then
+    print(sfmt('[flip_page] PING-PONG guard: item %d is oscillating, skipping', item_id))
+    -- Force focus to a different item far from this one
+    local sw2 = screen_w()
+    local ic = seen[item_id]
+    local item_cx = ic and (ic.x0 + ic.x1) * 0.5 or sw2 * 0.5
+    local best_id, best_d
+    for vid, vit in pairs(seen) do
+      if vid ~= item_id then
+        local vcx = (vit.x0 + vit.x1) * 0.5
+        -- Prefer items on the opposite side of screen from the oscillating one
+        local target_x = item_cx > sw2 * 0.5 and sw2 * 0.25 or sw2 * 0.75
+        local d = math.abs(vcx - target_x)
+        if not best_d or d < best_d then best_id, best_d = vid, d end
+      end
+    end
+    if best_id then
+      focus_id = best_id
+      last_flip_item = nil  -- allow fresh swipe from new item
+    end
+    return true
+  end
   local cams, cur = originalCameras, num(currentCamera)
+  print(sfmt('[flip_page] TRY right=%s cur=%s settled=%s', tostring(right), tostring(cur), tostring(settled)))
   local mirror = type(mirrorWorldHandler) == 'table' and mirrorWorldHandler.mirror and true or false
-  local onward = (right and true or false) ~= mirror -- toward the later cameras
+  local onward = (right and true or false) ~= mirror
   local step = onward and 1 or -1
-  local at, nt -- the camera shown, the next one on another page (cameras at one place are one page)
+  local at, nt
   if type(cams) == 'table' and #cams >= 2 and cur and cur >= 0 then
     at = cur + 1 + ((num(cameraAnimationSlider) or 0) >= 0.5 and 1 or 0)
     local pages = ls_page_list()
     nt = at + step
     while nt >= 1 and nt <= #cams and pages[nt] == pages[at] do nt = nt + step end
-    if nt < 1 or nt > #cams then return true end -- the first or the last page
+    if nt < 1 or nt > #cams then
+      print(sfmt('[flip_page] AT BOUNDARY at=%s nt=%s ncams=%d', tostring(at), tostring(nt), #cams))
+      return true
+    end
   end
-  if not nt or type(changeCameras) ~= 'function' then
-    -- not the cameras this expects: the game's own turn
-    if type(updatePCCameraPanningToDirection) ~= 'function' then return false end
+  if not nt then
     last_flip = frame_no
-    pcall(updatePCCameraPanningToDirection, right and true or false)
+    last_flip_item = item_id  -- remember which item triggered this
+    ls_pan_dir = right
+    ls_pan_frames = 0
+    ls_pan_sig = nil
+    ls_pan_still = 0
+    local req_str = right and 'swipe_right' or 'swipe_left'
+    request(req_str)
+    print(sfmt('[flip_page] SWIPE %s item=%s', req_str, tostring(item_id)))
     return true
   end
   -- the pair ending on it, its other camera on this page
@@ -675,17 +738,37 @@ local function reveal(id)
   -- not the item ZL/ZR has just paged away from (the controller brings the
   -- focus onto the new page)
   if not it or id == cmd_focus then return end
-  local f = it.sf
   local sw = screen_w()
-  if it.page then
-    -- a level on another page: a page at a time towards it
-    local now = ls_page_now()
-    if now and it.page ~= now then
-      local mirror = type(mirrorWorldHandler) == 'table' and mirrorWorldHandler.mirror and true or false
-      flip_page((it.page > now) ~= mirror)
+  -- LevelSelection uses camera paging, not scroll frames
+  if levelName == 'LevelSelection' then
+    -- While the camera is actively panning to a new page, do nothing —
+    -- the item will naturally come into view when the pan finishes.
+    if ls_pan_dir ~= nil then return end
+    local cx = (it.x0 + it.x1) * 0.5
+    local sw2 = screen_w()
+    local off_right = cx > sw2
+    local off_left  = cx < 0
+    local settled = camera_settled()
+    -- Log every time the focused item is off-screen (limit to avoid spam)
+    if (off_right or off_left) and frame_no % 6 == 0 then
+      print(sfmt('[reveal] id=%d cx=%.0f sw=%.0f off_right=%s off_left=%s settled=%s page_turn=%s',
+        id, cx, sw2, tostring(off_right), tostring(off_left), tostring(settled), tostring(page_turn ~= nil)))
+    end
+    if off_right or off_left then
+      -- Call flip_page regardless of settled state — flip_page has its own
+      -- rate limiter (frames_since guard). The camera in LevelSelection after
+      -- a partial swipe may never report settled=true, so we can't wait for it.
+      if not page_turn then
+        print(sfmt('[reveal] CALLING flip_page right=%s id=%d cx=%.0f settled=%s', tostring(off_right), id, cx, tostring(settled)))
+        _G._reveal_target = id
+        if off_right then flip_page(true, id) else flip_page(false, id) end
+      end
+    else
+      if _G._reveal_target == id then _G._reveal_target = nil end
     end
     return
   end
+  local f = it.sf
   if type(f) ~= 'table' then
     local cx = (it.x0 + it.x1) * 0.5
     if cx > sw then flip_page(true) elseif cx < 0 then flip_page(false) end
@@ -704,7 +787,6 @@ local function reveal(id)
   local scroll = f.scroll
   local target = (num(scroll.x) or 0) + d
   if type(f.anchors) == 'table' and #f.anchors > 0 then
-    -- the page whose anchor puts it on the screen
     local best, bd
     for i, a in ipairs(f.anchors) do
       local ax = num(a.x)
@@ -726,11 +808,11 @@ local function reveal(id)
     if hi and target > hi then target = hi end
     local v = num(f.velocity.x) or 0
     if f.dragging ~= true and math.abs(v) < 20 then
-      -- all of it in about a third of a second, slowing down
       f.velocity.x = (target - (num(scroll.x) or 0)) * 12
     end
   end
 end
+
 
 -- --------------------------------------------------------- the planets
 -- The episode selection page is a SpriteScene: a carousel of planets (and
@@ -1131,8 +1213,32 @@ local function buttons()
     end
   end
   seen = seen_next
+  if focused_dark_id and focused_dark_id ~= -1 then
+    g_abs_last_side = 'bird'
+  elseif focused_light_id and focused_light_id ~= -1 then
+    g_abs_last_side = 'pork'
+  end
+
   local sig = sig_frame and ssub(tostring(sig_frame), 8) or 'none'
   sig = sig:gsub('%s', '')
+  local ln_sig = type(captured_env) == 'table' and type(captured_env.levelName) == 'string' and captured_env.levelName or 'none'
+  
+  local ep_sig = ""
+  if type(captured_env) == 'table' then
+      ep_sig = type(captured_env.levelFolder) == 'string' and captured_env.levelFolder or (type(captured_env.levelPath) == 'string' and captured_env.levelPath or "")
+  end
+  if ep_sig == "" then
+      ep_sig = type(levelFolder) == 'string' and levelFolder or (type(levelPath) == 'string' and levelPath or "")
+  end
+  if ep_sig ~= "" then
+      -- Extract the last two directories or just something unique
+      -- e.g. "levels/episode1/birdside" -> "episode1_birdside"
+      ep_sig = string.gsub(ep_sig, "/", "_")
+      ep_sig = string.sub(ep_sig, -10) -- last 10 characters should be unique enough
+  end
+
+  sig = ssub(ln_sig, 1, 6) .. '_' .. ep_sig .. '_' .. sig
+  sig = ssub(sig, 1, 23)
   if sig == '' then sig = 'none' end
 
   -- debug: print when in menu but no items found
@@ -1542,8 +1648,7 @@ end
 -- videos/<topic>.mp4 from the SD card. The video plays inside the popup: the
 -- script reports the rectangle, abs_video.c draws into it, and the states
 -- come back (A.frame's vstate) for the spinner and the messages.
-local reqs = {}
-local function request(r) reqs[#reqs + 1] = r end
+-- reqs and request are declared earlier (before flip_page) so they are in scope there too.
 local VIDEOS = {}
 local ONLINE = false
 local VSTATE = 0
@@ -2159,6 +2264,55 @@ local function page_turn_update()
       end
     end
   end
+  -- While a swipe-based page turn is in progress, block reveal() and wait
+  -- for camera_settled(). The swipe was already triggered by request('swipe_right/left').
+  if ls_pan_dir ~= nil and levelName == 'LevelSelection' then
+    ls_pan_frames = ls_pan_frames + 1
+    -- camera_settled() is true BEFORE the camera starts gliding, so it can't
+    -- be trusted. Instead: the swipe is over when the on-screen positions of
+    -- all items have stopped changing for several consecutive frames.
+    local sig = 0
+    for _, vit in pairs(seen) do sig = sig + vit.x0 end
+    if ls_pan_sig and math.abs(sig - ls_pan_sig) < 1 then
+      ls_pan_still = ls_pan_still + 1
+    else
+      ls_pan_still = 0
+    end
+    ls_pan_sig = sig
+    local pan_done = (ls_pan_frames > 20 and ls_pan_still >= 10) or ls_pan_frames > 180
+    if ls_pan_frames % 20 == 0 then
+      print(sfmt('[pan] waiting: frames=%d still=%d sig=%.0f', ls_pan_frames, ls_pan_still, sig))
+    end
+    if pan_done then
+      print(sfmt('[pan] done: frames=%d still=%d', ls_pan_frames, ls_pan_still))
+      last_flip = frame_no - 400  -- next flip_page is allowed right away
+      last_flip_item = nil
+      ls_pan_dir = nil
+      ls_pan_frames = 0
+      ls_pan_sig = nil
+      ls_pan_still = 0
+      -- Keep the focus if it is on-screen; otherwise move it to the on-screen
+      -- item nearest to the screen center.
+      local sw2 = screen_w()
+      local cur = focus_id and seen[focus_id]
+      local cur_cx = cur and (cur.x0 + cur.x1) * 0.5
+      if not _G._reveal_target and not (cur_cx and cur_cx >= 0 and cur_cx <= sw2) then
+        local best_id, best_d
+        for vid, vit in pairs(seen) do
+          local vcx = (vit.x0 + vit.x1) * 0.5
+          local vcy = (vit.y0 + vit.y1) * 0.5
+          if vcx >= 0 and vcx <= sw2 then
+            local d = (vcx - sw2 * 0.5) * (vcx - sw2 * 0.5) + (vcy - 360) * (vcy - 360)
+            if not best_d or d < best_d then best_id, best_d = vid, d end
+          end
+        end
+        print(sfmt('[pan] focus off-screen (cx=%s) -> redirect best_id=%s', tostring(cur_cx), tostring(best_id)))
+        if best_id then focus_id = best_id end
+      else
+        print(sfmt('[pan] focus kept id=%s cx=%.0f', tostring(focus_id), cur_cx))
+      end
+    end
+  end
   if not t then return end
   local sl = num(cameraAnimationSlider)
   if levelName ~= 'LevelSelection' or num(currentCamera) ~= t.cam or not sl or math.abs(sl - t.last) > 1e-3 or
@@ -2295,7 +2449,8 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
                        ln == 'EpisodeSelectionScene' or ln == 'WorldSelectionScene' or
                        sfind(ln, 'pisodeSel', 1, true) or sfind(ln, 'orldSel', 1, true) or
                        sfind(ln, 'evelSel', 1, true) or
-                       sfind(ln, 'pisodeScen', 1, true))
+                       sfind(ln, 'pisodeScen', 1, true) or
+                       sfind(ln, 'Comic', 1, true))
     end
     if not is_sel_screen and cbn == nil then
       -- No bird in slingshot: maybe a world/episode screen. Check for episode page.
@@ -2332,11 +2487,15 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       local ipi = ignorePlayerInput or (type(gamelua) == 'table' and gamelua.ignorePlayerInput)
       local have = uses and cbn ~= nil and not ipi and
                    type(world) == 'table' and world[cbn] ~= nil
+                   
+      raw_bx, raw_lx = nil, nil
+      
       if type(lsp) == 'table' and num(lsp.x) then
         local x, y = p2s(lsp.x, lsp.y)
         local ex = p2s(lsp.x + MAX_LENGTH, lsp.y)
         if x and ex then
-          lx, ly = x / sw, y / sh
+          raw_lx = x / sw
+          lx, ly = raw_lx, y / sh
           pullr = math.abs(ex - x) / sw
         end
       end
@@ -2344,9 +2503,24 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
         local bird = world[cbn]
         if type(bird) == 'table' and num(bird.x) then
           local x, y = p2s(bird.x, bird.y)
-          if x then bx, by = x / sw, y / sh end
+          if x then 
+            raw_bx = x / sw
+            bx, by = raw_bx, y / sh 
+          end
         end
       end
+      
+      -- Evaluate visibility BEFORE fallbacks destroy the coordinates
+      check_x = (raw_bx ~= nil) and raw_bx or raw_lx
+      slingshot_visible = false
+      if check_x ~= nil and check_x >= -0.05 and check_x <= 1.05 then
+        slingshot_visible = true
+      end
+      
+      -- Determine if we are in intro/panning state based solely on visibility
+      intro_st = (not slingshot_visible) and (mode == MODE_AIM or mode == MODE_WAIT)
+      if intro_st then ready = 2 end
+      
       -- FALLBACK: If bx < 0 (bird coordinates not resolved from world), but slingshot lx, ly is known:
       if bx < 0 and lx >= 0 then
         bx, by = lx, ly
@@ -2360,6 +2534,8 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       local sb = selectedBird or (type(gamelua) == 'table' and gamelua.selectedBird)
       local bsa = birdSpecialtyAvailable or (type(gamelua) == 'table' and gamelua.birdSpecialtyAvailable)
       aiming = (sb ~= nil) and 1 or 0
+
+
       special = (fb ~= nil and bsa == true) and 1 or 0
 
       local bt = blockTable or (type(gamelua) == 'table' and gamelua.blockTable)
@@ -2381,6 +2557,17 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
         mode = MODE_WAIT
       end
       if mode ~= MODE_FLIGHT and aiming == 1 then mode = MODE_AIM end
+
+      -- Level intro: if the slingshot is not visible (ready=2 set above), we log it
+      do
+        local ge = captured_env or {}
+        local lname = tostring(ge.levelName)
+        if intro_st ~= g_abs_intro_prev then
+          g_abs_intro_prev = intro_st
+          print(sfmt('[intro-debug] intro=%s bx=%.2f by=%.2f lvl=%s',
+            tostring(intro_st), bx, by, lname))
+        end
+      end
       if mode == MODE_FLIGHT and fbx then bx, by = fbx, fby end
       pcall(camera, p or 0, py or 0, z or 0)
       if cmd == CMD_SLING or cmd == CMD_CASTLE then
@@ -2395,7 +2582,11 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
         end
       end
     end
-    if cmd == CMD_PAUSE then
+    if cmd == 15 then
+      -- slingshot stretch sound (same call the game makes for a finger pull)
+      local pan = playAudioNative or (type(gamelua) == 'table' and gamelua.playAudioNative)
+      if type(pan) == 'function' then pcall(pan, 'slingshot_stretched', 1, false, 5) end
+    elseif cmd == CMD_PAUSE then
       local tpp = togglePausePage or (type(gamelua) == 'table' and gamelua.togglePausePage) or
                   togglePause or (type(gamelua) == 'table' and gamelua.togglePause)
       call(tpp)
@@ -2429,7 +2620,13 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local mmf = 0
   if want and mode ~= MODE_AIM and mode ~= MODE_FLIGHT and mode ~= MODE_WAIT then
     nb, list, sig, page, carousel = buttons()
-    if focus and focus > 1 then pcall(reveal, focus) end
+    if sig ~= _G._last_sig then
+      _G._last_sig = sig
+      _G._frames_since_sig = 0
+    else
+      _G._frames_since_sig = (_G._frames_since_sig or 0) + 1
+    end
+    if focus and focus > 1 and (_G._frames_since_sig > 10) then pcall(reveal, focus) end
     local ok, f = pcall(main_menu_flags)
     if ok then mmf = f end
     -- the pause page is what is on top: B does nothing there (+ resumes)
@@ -2482,6 +2679,7 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   elseif cmd == CMD_PAGE_NEXT or cmd == CMD_PAGE_PREV then
     local b = base_frame()
     local pg = b and find_pager(b, 0)
+    print(sfmt('[cmd-page] cmd=%d ln=%s pg=%s', cmd, tostring(levelName), tostring(pg ~= nil)))
     if not pg then flip_page(cmd == CMD_PAGE_NEXT) end
     cmd_focus = focus
     if pg then
@@ -2495,6 +2693,7 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   if #reqs > 0 then
     r = concat(reqs, ','):gsub('[^%w_:,%-]', '')
     if r == '' then r = '-' end
+    print(sfmt('[reqs] sending: %s', r))
     reqs = {}
   end
   local vx, vy, vw, vh = -1, -1, -1, -1
@@ -2504,8 +2703,11 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
   local is_ep_sel_v = (page ~= nil or
                ln == 'EpisodeSelection' or ln == 'EpisodeSelectionScene' or
                ln == 'WorldSelection' or ln == 'WorldSelectionScene' or
+               ln == 'LevelSelection' or
                (type(ln) == 'string' and sfind(ln, 'pisodeSel', 1, true)) or
                (type(ln) == 'string' and sfind(ln, 'orldSel', 1, true))) and 1 or 0
+  -- cutscene/comic (levelName like Chapter_1_light_Comic_1): 3 = A taps the screen
+  if type(ln) == 'string' and sfind(ln, 'Comic', 1, true) then is_ep_sel_v = 3 end
   if is_ep_sel_v == 1 and frame_no % 60 == 0 then
     print(sfmt('[ep-debug] is_ep_sel=1 ln=%s page=%s carousel=%d', tostring(ln), tostring(page), carousel))
   end

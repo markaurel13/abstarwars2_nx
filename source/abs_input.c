@@ -164,6 +164,16 @@ void abs_input_syn(int phase, float x, float y) {
   }
 }
 
+/* Called from abs_lua.c to do a one-page horizontal swipe for LevelSelection */
+void abs_input_swipe_h(int right) {
+  const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
+  const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f; /* same as ZL/ZR: exactly one page */
+  if (right)
+    syn_swipe_start(cx + dx, cx - dx, cy, cy, 10); /* right-to-left = advance */
+  else
+    syn_swipe_start(cx - dx, cx + dx, cy, cy, 10); /* left-to-right = go back */
+}
+
 void abs_cursor_init(void);
 void abs_cursor_enter(float x, float y);
 void abs_cursor_leave(void);
@@ -190,6 +200,7 @@ static struct {
   u64 cam_back_at; /* when the camera was last sent back to the slingshot for a grab */
   /* menus */
   int focus_on;    /* an item is focused (and ringed) */
+  int force_first_level; /* set when entering LevelSelection from Episod */
   int touch_mode;  /* the touchscreen was used last: no ring until a button */
   float fx, fy;    /* its centre (kept across frames: the list reorders) */
   int fkind;       /* its kind (ABS_ITEM_*) */
@@ -203,6 +214,7 @@ static struct {
     char sig[24];
     float fx, fy;
     int kind;
+    int id;
   } mem[MEMS];     /* where the focus was on the last few screens */
   int mem_next;
   u64 nav_next;    /* stick navigation repeat */
@@ -223,6 +235,12 @@ static struct {
   char toast[96];
   u64 toast_until;
 } S;
+
+static int s_comic_launcher_id = 0;
+static float s_comic_launcher_x = 0;
+static float s_comic_launcher_y = 0;
+static char s_comic_launcher_sig[32] = "";
+static int s_just_returned_to_level_selection = 0;
 
 static Mutex g_draw_lock;
 static struct {
@@ -375,7 +393,20 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
    * B cancels the pull.
    * A fires the bird.
    */
-  const int can_aim = (st->mode == ABS_MODE_AIM || st->mode == ABS_MODE_WAIT);
+  /* Level intro: left stick is completely disabled.
+   * Pressing A taps the screen to skip. */
+  static int a_was_down = 0;
+  int intro_wait = st->intro;
+  
+  if (st->intro) {
+    if ((down & k_a) && !a_was_down) {
+      syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.5f);
+      debugPrintf("[input] intro: A pressed -> tapping screen to skip natively\n");
+    }
+  }
+  a_was_down = (down & k_a);
+
+  const int can_aim = (st->mode == ABS_MODE_AIM || st->mode == ABS_MODE_WAIT) && !intro_wait;
   
   if (can_aim || S.aiming) {
     const float bx = st->bird_x >= 0 ? st->bird_x : (st->sling_x >= 0 ? st->sling_x : abs_surface_w() * 0.24f);
@@ -407,6 +438,7 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       }
       syn_down(bx, by);
       S.aiming = 1;
+      abs_lua_command(ABS_CMD_STRETCH_SOUND);
       S.held = 1;
       S.returning = 0;
       S.ax = sx;
@@ -507,11 +539,15 @@ static int nearest(const AbsLuaState *st, float x, float y, unsigned kinds) {
  * nearest of its kind */
 static int refind(const AbsLuaState *st) {
   for (int i = 0; i < st->nbuttons; i++)
-    if (st->buttons[i].id == S.fitem.id && S.fitem.id)
+    if (st->buttons[i].id == S.fitem.id && S.fitem.id) {
+      debugPrintf("[input] refind MATCHED id=%d at idx=%d\n", S.fitem.id, i);
       return i;
+    }
   int i = nearest(st, S.fx, S.fy, K(S.fkind));
   if (i < 0)
     i = nearest(st, S.fx, S.fy, K_FOCUSABLE);
+  debugPrintf("[input] refind FALLBACK id=%d (fx=%.1f fy=%.1f) -> nearest idx=%d (id=%d)\n",
+              S.fitem.id, S.fx, S.fy, i, (i >= 0 ? st->buttons[i].id : -1));
   return i;
 }
 
@@ -599,6 +635,8 @@ static int step(const AbsLuaState *st, float dx, float dy, unsigned kinds) {
 
 static void focus_set(const AbsLuaState *st, int i) {
   const AbsItem *it = &st->buttons[i];
+  debugPrintf("[input] focus_set: idx=%d id=%d vis=%d ax=%.1f ay=%.1f\n",
+              i, it->id, it->vis, it->ax, it->ay);
   S.fx = icx(it);
   S.fy = icy(it);
   S.fkind = it->kind;
@@ -626,6 +664,7 @@ static int best_item(const AbsLuaState *st) {
 /* a new screen (or popup): remember where the focus was on the old one; on
  * the new one go back to where it was, or to its best item */
 static void screen_changed(const AbsLuaState *st) {
+  int from_episod = !strncmp(S.sig, "Episod", 6);
   if (S.sig[0] && S.focus_on) {
     int slot = -1;
     for (int i = 0; i < MEMS; i++)
@@ -634,22 +673,57 @@ static void screen_changed(const AbsLuaState *st) {
     if (slot < 0)
       slot = S.mem_next++ % MEMS;
     snprintf(S.mem[slot].sig, sizeof S.mem[slot].sig, "%s", S.sig);
-    S.mem[slot].fx = S.fx, S.mem[slot].fy = S.fy, S.mem[slot].kind = S.fkind;
+    S.mem[slot].fx = S.fx, S.mem[slot].fy = S.fy, S.mem[slot].kind = S.fkind, S.mem[slot].id = S.fitem.id;
+    debugPrintf("[input] screen_changed SAVE: slot=%d sig=%s id=%d fx=%.1f fy=%.1f\n",
+                slot, S.mem[slot].sig, S.mem[slot].id, S.mem[slot].fx, S.mem[slot].fy);
   }
   snprintf(S.sig, sizeof S.sig, "%s", st->sig);
   S.moved = 0;
   for (int i = 0; i < MEMS; i++)
     if (!strcmp(S.mem[i].sig, st->sig)) {
+      if (!strcmp(st->sig, s_comic_launcher_sig) && s_comic_launcher_id > 0) {
+        s_just_returned_to_level_selection = 1;
+        S.mem[i].id = s_comic_launcher_id;
+        S.mem[i].fx = s_comic_launcher_x;
+        S.mem[i].fy = s_comic_launcher_y;
+        debugPrintf("[input] screen_changed override LevelS with launcher id=%d fx=%.1f fy=%.1f\n",
+                    s_comic_launcher_id, s_comic_launcher_x, s_comic_launcher_y);
+      } else if (from_episod && !strncmp(st->sig, "LevelS", 6)) {
+        /* When entering a new world from Episode Selection, always start at the first page! */
+        /* Clear the memory so it acts like a fresh screen, and let the force flag handle it. */
+        S.mem[i].sig[0] = '\0';
+        break; /* Fall out of the loop and treat as fresh */
+      }
       S.fx = S.mem[i].fx, S.fy = S.mem[i].fy, S.fkind = S.mem[i].kind;
-      S.fitem.id = 0;
+      S.fitem.id = S.mem[i].id;
       S.moved = 1; /* the player's own choice: keep it */
       int n = refind(st);
+      debugPrintf("[input] screen_changed RESTORE: slot=%d sig=%s id=%d -> refind n=%d\n",
+                  i, S.mem[i].sig, S.mem[i].id, n);
       if (n >= 0)
         focus_set(st, n);
       return;
     }
+  if (!strcmp(st->sig, s_comic_launcher_sig) && s_comic_launcher_id > 0) {
+    s_just_returned_to_level_selection = 1;
+    S.fx = s_comic_launcher_x;
+    S.fy = s_comic_launcher_y;
+    S.fitem.id = s_comic_launcher_id;
+    S.moved = 1;
+    int n = refind(st);
+    debugPrintf("[input] screen_changed fresh LevelS launcher id=%d refind n=%d\n",
+                s_comic_launcher_id, n);
+    if (n >= 0) {
+      focus_set(st, n);
+      return;
+    }
+  }
+  if (from_episod && !strncmp(st->sig, "LevelS", 6)) {
+      /* Defer the search to menus() so we don't fail if buttons aren't collected yet. */
+      S.force_first_level = 1;
+  }
   int n = best_item(st);
-  S.focus_on = 0;
+  debugPrintf("[input] screen_changed fresh: best_item n=%d\n", n);
   if (n >= 0)
     focus_set(st, n);
 }
@@ -697,11 +771,42 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     return;
   }
 
+  if (strcmp(st->sig, S.sig))
+    screen_changed(st);
+
+  /* Cutscene / comic: hide focus ring until the "done" button appears.
+     A speeds up the cutscene or clicks "done" if it's there. */
+  if (st->is_ep_sel == 3) {
+    int done_idx = -1;
+    for (int i = 0; i < st->nbuttons; i++) {
+      if (st->buttons[i].vis && st->buttons[i].ay > 600.0f && st->buttons[i].ax > 1100.0f) {
+        done_idx = i;
+        break;
+      }
+    }
+    if (done_idx >= 0) {
+      S.focus_on = 1;
+      focus_set(st, done_idx);
+      if (down & k_a)
+        syn_tap(S.fitem.ax, S.fitem.ay);
+    } else {
+      S.focus_on = 0;
+      if (down & k_a) {
+        debugPrintf("[input] comic: A -> tap\n");
+        syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.5f);
+      }
+    }
+    if (down & k_b)
+      back_press(st);
+    return;
+  }
+
+  const int ep_sel = (st->is_ep_sel == 1);
   /* ZL and ZR: scroll worlds/pages horizontally with swipe and page commands */
   int spin_ms = SPIN_MS;
-  const int is_carousel = carousel || st->is_ep_sel;
+  const int is_carousel = carousel || ep_sel;
   if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZL)) {
-    if (st->is_ep_sel && !carousel) {
+    if (ep_sel && !carousel) {
       /* ABSW2 EpisodeSelection: no Lua carousel -- inject a multi-frame horizontal swipe */
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
       const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f;
@@ -714,7 +819,7 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     }
   }
   if (st->mode == ABS_MODE_MENU && (down & HidNpadButton_ZR)) {
-    if (st->is_ep_sel && !carousel) {
+    if (ep_sel && !carousel) {
       /* ABSW2 EpisodeSelection: no Lua carousel -- inject a multi-frame horizontal swipe */
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
       const float cx = W * 0.5f, cy = H * 0.5f, dx = W * 0.28f;
@@ -728,6 +833,15 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   }
   if ((down & HidNpadButton_Plus) && st->mode == ABS_MODE_PAUSED)
     abs_lua_command(ABS_CMD_PAUSE);
+
+  /* Lua-queued horizontal swipe (D-pad edge navigation in LevelSelection) */
+  {
+    int ps = abs_lua_take_pending_swipe();
+    if (ps != 0 && st->mode == ABS_MODE_MENU) {
+      debugPrintf("[input] lua-queued swipe %s\n", ps > 0 ? "RIGHT" : "LEFT");
+      abs_input_swipe_h(ps > 0);
+    }
+  }
 
   /* a direction: D-pad or Left Stick with repeat */
   float dx = 0, dy = 0;
@@ -778,7 +892,7 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
 
   if (st->nbuttons <= 0 || !st->sig[0] || !strcmp(st->sig, "busy")) {
     S.focus_on = 0;
-    if ((down & k_a) && (st->is_ep_sel || (st->nbuttons <= 0 && strcmp(st->sig, "busy"))))
+    if ((down & k_a) && (ep_sel || (st->nbuttons <= 0 && strcmp(st->sig, "busy"))))
       syn_tap(abs_surface_w() * 0.5f, abs_surface_h() * 0.5f); /* nothing known to press: the middle */
     if (down & k_b)
       back_press(st);
@@ -830,16 +944,52 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       S.repage = 0;
     }
   }
-  if (strcmp(st->sig, S.sig))
-    screen_changed(st);
+
+  /* If returning to LevelSelection and we have a launcher ID, guarantee it takes focus */
+  if (s_just_returned_to_level_selection && !strcmp(st->sig, s_comic_launcher_sig) && s_comic_launcher_id > 0) {
+    int found = -1;
+    for (int i = 0; i < st->nbuttons; i++) {
+      if (st->buttons[i].id == s_comic_launcher_id) {
+        found = i;
+        break;
+      }
+    }
+    /* Fallback to nearest only if we have buttons but didn't find the exact ID */
+    if (found < 0 && st->nbuttons > 0) {
+      found = nearest(st, s_comic_launcher_x, s_comic_launcher_y, K_FOCUSABLE);
+    }
+    if (found >= 0) {
+      debugPrintf("[input] Enforced launcher focus in LevelSelection: idx=%d id=%d (target=%d)\n",
+                  found, st->buttons[found].id, s_comic_launcher_id);
+      focus_set(st, found);
+      S.moved = 1;
+      s_comic_launcher_id = 0;
+      s_just_returned_to_level_selection = 0;
+    }
+  }
+
+  if (S.force_first_level && !strncmp(st->sig, "LevelS", 6) && st->nbuttons > 0) {
+    int first_idx = -1;
+    float min_ax = 1e18f;
+    for (int j = 0; j < st->nbuttons; j++) {
+        if (st->buttons[j].round == 1 && st->buttons[j].ax < min_ax) {
+            min_ax = st->buttons[j].ax;
+            first_idx = j;
+        }
+    }
+    if (first_idx >= 0) {
+        focus_set(st, first_idx);
+        S.moved = 1;
+        S.force_first_level = 0;
+    }
+  }
+
   int cur = S.focus_on ? refind(st) : -1;
   if (cur >= 0)
     focus_set(st, cur);
   else {
     cur = best_item(st);
     if (cur < 0) {
-      /* If no button is on screen (e.g. comic cutscene / splash screen animating),
-       * pressing A or B taps the screen so the cutscene advances or fast-forwards. */
       if (down & (k_a | k_b))
         syn_tap((float)abs_surface_w() * 0.5f, (float)abs_surface_h() * 0.5f);
       return;
@@ -868,6 +1018,7 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
     S.hidden_since = 0;
   }
   if (dir) {
+    S.force_first_level = 0;
     int n = -1;
     S.moved = 1;
     S.repage = 0;
@@ -897,13 +1048,23 @@ static void menus(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
       focus_set(st, n);
       if (!st->buttons[n].vis) {
         float cx = abs_surface_w() * 0.5f, cy = abs_surface_h() * 0.5f;
-        if (dy > 0) syn_swipe_start(cx, cx, cy * 1.5f, cy * 0.5f, 10);
-        if (dy < 0) syn_swipe_start(cx, cx, cy * 0.5f, cy * 1.5f, 10);
+        if (fabsf(dy) > fabsf(dx)) {
+          if (dy > 0) syn_swipe_start(cx, cx, cy * 1.5f, cy * 0.5f, 10);
+          if (dy < 0) syn_swipe_start(cx, cx, cy * 0.5f, cy * 1.5f, 10);
+        }
       }
     }
   }
   if (down & k_a) {
     debugPrintf("[input] A pressed in menu: id=%d, vis=%d, kind=%d, ax=%f, ay=%f\n", S.fitem.id, S.fitem.vis, S.fitem.kind, S.fitem.ax, S.fitem.ay);
+    if (!strncmp(st->sig, "LevelS", 6)) {
+      s_comic_launcher_id = S.fitem.id;
+      s_comic_launcher_x = S.fx;
+      s_comic_launcher_y = S.fy;
+      snprintf(s_comic_launcher_sig, sizeof s_comic_launcher_sig, "%s", st->sig);
+      debugPrintf("[input] Saved LevelSelection launcher: id=%d fx=%.1f fy=%.1f sig=%s\n",
+                  s_comic_launcher_id, s_comic_launcher_x, s_comic_launcher_y, s_comic_launcher_sig);
+    }
     if (S.fitem.vis)
       syn_tap(S.fitem.ax, S.fitem.ay);
   }
@@ -1024,8 +1185,12 @@ void abs_input_update(void) {
     set_scheme(S.scheme == ABS_SCHEME_CURSOR ? ABS_SCHEME_CONSOLE : ABS_SCHEME_CURSOR);
 
   /* the cursor: in cursor mode; when the script cannot see the game;
-   * in the menus, when config.ini turns the ring off */
-  cursor = (S.scheme == ABS_SCHEME_CURSOR) || !abs_lua_active() ||
+   * in the menus, when config.ini turns the ring off.
+   * Exception: don't show cursor during the loading screen — Lua is not
+   * yet active then but the cursor would flicker before the menu appears. */
+  static int has_been_active = 0;
+  if (abs_lua_active()) has_been_active = 1;
+  cursor = (S.scheme == ABS_SCHEME_CURSOR) || (!abs_lua_active() && has_been_active) ||
            (!in_level && !dcr_config()->menu_focus);
   if (cursor) {
     S.focus_on = 0;

@@ -126,6 +126,8 @@ static AbsLuaState g_snap;
 static int g_cmds[8], g_ncmds;
 static float g_pan, g_pany, g_zoom;
 static volatile int g_focus_id; /* the controller's focused item */
+/* pending swipe requested by Lua: 1=right, -1=left, 0=none */
+static volatile int g_pending_swipe;
 
 /* One entry per Lua universe (global_State): the script is loaded in each,
  * and only the game's (the one with GameSystem) receives requests. */
@@ -152,6 +154,13 @@ static Uni *uni_for(void *G) {
 }
 
 int abs_lua_active(void) { return g_enabled && !g_failed && g_snap.valid; }
+
+/* Atomically take (and clear) a pending swipe queued by Lua: 1=right, -1=left, 0=none */
+int abs_lua_take_pending_swipe(void) {
+  int v = g_pending_swipe;
+  if (v) g_pending_swipe = 0;
+  return v;
+}
 
 void abs_lua_snapshot(AbsLuaState *out) {
   mutexLock(&g_lock);
@@ -211,6 +220,7 @@ static void parse(const char *s, Uni *u) {
   st.scr_w = next_f(&p);
   st.scr_h = next_f(&p);
   int ready = (int)next_f(&p);
+  st.intro = (ready == 2);
   const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
   float bx = next_f(&p), by = next_f(&p), lx = next_f(&p), ly = next_f(&p);
   st.pull = next_f(&p) * W;
@@ -225,6 +235,7 @@ static void parse(const char *s, Uni *u) {
   next_word(&p, st.sig, sizeof st.sig);
   next_word(&p, req, sizeof req);
   const float clock = next_f(&p);
+  st.clock = clock;
   st.mm = (int)next_f(&p);
   float vx = next_f(&p), vy = next_f(&p), vw = next_f(&p), vh = next_f(&p);
   st.carousel = (int)next_f(&p);
@@ -297,6 +308,10 @@ static void parse(const char *s, Uni *u) {
       } else if (!strncmp(r, "page:", 5) && r[5]) {
         debugPrintf("[lua] link %s: the game's popup could not be made; the port's page\n", r + 5);
         abs_extras_open(r + 5);
+      } else if (!strcmp(r, "swipe_right") || !strcmp(r, "swipe_left")) {
+        /* Queue a horizontal swipe for the input thread (same timing as ZL/ZR) */
+        debugPrintf("[lua] %s queued\n", r);
+        g_pending_swipe = !strcmp(r, "swipe_right") ? 1 : -1;
       } else if (!strncmp(r, "note:", 5) && r[5]) {
         /* a line for the log (spaces come as _: requests are words) */
         for (char *c = r + 5; *c; c++)

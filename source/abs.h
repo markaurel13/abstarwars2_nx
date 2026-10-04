@@ -81,6 +81,8 @@ void abs_touch(int action, float x, float y, int id);
 void abs_key(int keycode, int down);
 /* A link's popup closed (the script says so): back to the focus ring. */
 void abs_input_popup_closed(void);
+/* Inject a horizontal swipe (1=right/advance, 0=left/back) for page navigation. */
+void abs_input_swipe_h(int right);
 
 /* ------------------------------------------------------------- abs_lua.c */
 /* The controller script inside the game's Lua (see abs_lua.c). */
@@ -119,6 +121,7 @@ typedef struct {
   float sling_x, sling_y;/* the slingshot's rest point, screen */
   float pull;            /* full pull, screen pixels */
   int special;           /* the flying bird's power is still unused */
+  int intro;             /* the level's opening camera pan: the stick must not aim */
   int aiming;            /* a bird is held (touch or ours) */
   char sig[24];          /* the screen or popup on top: changes with it */
   int carousel;
@@ -129,10 +132,12 @@ typedef struct {
   float tap_x, tap_y;    /* a HUD button to press (restart, eagle) ... */
   uint32_t tap_seq;      /* ... new when this changes */
   uint32_t frame;        /* bumps every time the script reports */
+  float clock;           /* level time */
 } AbsLuaState;
 
 void abs_lua_install(void);          /* before the engine's Lua exists */
 int abs_lua_active(void);            /* the bridge found the game's state */
+int abs_lua_take_pending_swipe(void); /* consume Lua-queued swipe: 1=right -1=left 0=none */
 void abs_lua_snapshot(AbsLuaState *out);
 /* Requests for the script's next run (update thread). */
 enum {
@@ -148,6 +153,9 @@ enum {
   ABS_CMD_POWERUPS,          /* a level's power-ups bar (bottom left): open / fold it */
   ABS_CMD_EPISODE_LIGHT,
   ABS_CMD_EPISODE_DARK,
+  ABS_CMD_SWIPE_RIGHT,       /* inject a right-to-left horizontal swipe (advance page) */
+  ABS_CMD_SWIPE_LEFT,        /* inject a left-to-right horizontal swipe (go back page) */
+  ABS_CMD_STRETCH_SOUND,     /* play the slingshot's stretch sound (stick pulls) */
 };
 void abs_lua_command(int cmd);
 #define ABS_CMD_ARG(cmd, n) ((cmd) + (n) * 256) /* a command with a number (abs_ctl.lua A.frame) */

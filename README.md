@@ -47,7 +47,7 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 - A Nintendo Switch running **Atmosphère** custom firmware.
 - The [Sphaira](https://github.com/ITotalJustice/sphaira) homebrew menu (recommended for installing the forwarder).
 - A copy of **Angry Birds Star Wars II.apk** (v1.9.25, no modified)
-- The folder `data/files/` known as just the "assets" (required because Rovio's original online download servers were discontinued and the apk does not contain the assets).
+- The folder `data/files/` known as just "Angry birds star wars 2 assets" (required because Rovio's original online download servers were discontinued and the apk does not contain the assets).
 
 ---
 
@@ -88,7 +88,8 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 | :--- | :--- |
 | **Touchscreen** | Direct touch controls (identical to the mobile version) |
 | **Left Stick** | Hand cursor movement / aiming |
-| **A / ZL / ZR** | Touch / Slingshot pull & release |
+| **A** | Shoot/Activate power |
+| **ZL/ZR/D-Pad/Right Stick** | camera movement/level selector |
 | **B** | Back / Cancel |
 | **+ (Plus)** | Pause / Resume |
 
