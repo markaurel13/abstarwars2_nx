@@ -2577,7 +2577,7 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       end
       g_abs_last_check_x = check_x
       
-      intro_st = (ipi or not slingshot_visible or is_moving) and (mode == MODE_AIM or mode == MODE_WAIT)
+      intro_st = (ipi or not slingshot_visible or is_moving or not in_gameplay) and (mode == MODE_AIM or mode == MODE_WAIT)
       
       if intro_st then 
         ready = 2 
