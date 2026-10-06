@@ -45,7 +45,7 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 
 ### For Players
 - A Nintendo Switch running **Atmosphère** custom firmware.
-- The [Sphaira](https://github.com/ITotalJustice/sphaira) homebrew menu (pretty important, if you do not install the forwarder with Sphaira, the port will not work since it will believe that we are running a 64-bit game instead of 32-bits).
+- The [Sphaira](https://github.com/ITotalJustice/sphaira) homebrew menu (Important: You need to install Sphaira's forwarder, otherwise the port won't work — the system will detect it as a 64-bit game instead of 32-bit)
 - A copy of **Angry Birds Star Wars II.apk** (v1.9.25, no modified)
 - The folder `data/files/` known as just "Angry birds star wars 2 assets" (required because Rovio's original online download servers were discontinued and the apk does not contain the assets).
 
