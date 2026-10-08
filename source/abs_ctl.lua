@@ -2548,10 +2548,21 @@ function A.frame(cmd, p, z, flags, memlimit, vstate, focus, py)
       if special == 1 and type(fb) == 'table' and num(fb.x) and type(bt) == 'table' and
          type(bt.blocks) == 'table' then
         local d = bt.blocks[fb.definition]
-        if type(d) == 'table' and AIMED_POWERS[d.specialty] then
-          special = 2
-          local x, y = p2s(fb.x, fb.y)
-          if x then fbx, fby = x / sw, y / sh end
+        if type(d) == 'table' and type(d.specialty) == 'string' then
+          local spec = string.upper(d.specialty)
+          g_spec_logged = g_spec_logged or {}
+          local is_aimed = AIMED_POWERS[spec] or sfind(spec, 'LASER') or sfind(spec, 'LAZER') or sfind(spec, 'GRENADE') or sfind(spec, 'TRACTOR') or sfind(spec, 'BLASTER') or sfind(spec, 'FORCE') or sfind(spec, 'LIGHTNING') or sfind(spec, 'MISSILE') or sfind(spec, 'ROCKET') or sfind(spec, 'PULL') or sfind(spec, 'PUSH') or sfind(spec, 'SHOOT') or sfind(spec, 'GUN') or sfind(spec, 'BOMB') or sfind(spec, 'FLAME') or sfind(spec, 'RAGDOLL') or sfind(spec, 'BOOMERANG') or sfind(spec, 'SNIPER') or sfind(spec, 'SLICE') or sfind(spec, 'TONGUE')
+          
+          if not g_spec_logged[spec] then
+            g_spec_logged[spec] = true
+            print("[spec-debug] Fired bird with specialty: " .. spec .. " is_aimed: " .. tostring(is_aimed))
+          end
+
+          if is_aimed then
+            special = 2
+            local x, y = p2s(fb.x, fb.y)
+            if x then fbx, fby = x / sw, y / sh end
+          end
         end
       end
 

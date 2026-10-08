@@ -209,6 +209,7 @@ static struct {
   int moved;       /* the player moved the focus on this screen */
   int mcursor;     /* menus: the hand cursor is out (the right stick brought it) */
   int pcur;        /* a level: the aiming cursor is out (a flying bird's aimed power) */
+  int pcur_wait_stick; /* flag to ignore joystick until it returns to center after launch */
   int carousel;    /* the planet carousel: 1 settled, 2 turning */
   struct {
     char sig[24];
@@ -481,11 +482,22 @@ static void level(const AbsLuaState *st, u64 down, u64 held, float lsx, float ls
   if (st->mode == ABS_MODE_FLIGHT && st->special == 2) {
     if (!S.pcur) {
       S.pcur = 1;
+      S.pcur_wait_stick = 1; /* Wait for user to let go of the slingshot stick */
       const float W = (float)abs_surface_w(), H = (float)abs_surface_h();
-      int on = st->bird_x >= 0 && st->bird_y >= 0 && st->bird_x < W && st->bird_y < H;
-      abs_cursor_aim_start(on ? st->bird_x : W * 0.5f, on ? st->bird_y : H * 0.55f);
+      abs_cursor_aim_start(W * 0.5f, H * 0.5f); /* Always start exactly in the center */
     }
-    abs_cursor_aim(lsx, lsy);
+
+    if (S.pcur_wait_stick) {
+      if (fabsf(lsx) < 0.1f && fabsf(lsy) < 0.1f) {
+        S.pcur_wait_stick = 0; /* User released the stick, enable cursor movement */
+      }
+    }
+
+    if (!S.pcur_wait_stick) {
+      abs_cursor_aim(lsx, lsy);
+    } else {
+      abs_cursor_aim(0.0f, 0.0f); /* Keep it still */
+    }
     if (down & fire_btn) {
       if (armTicksToNs(armGetSystemTick() - S.launch_time) > 300000000ull) {
         debugPrintf("[input] A pressed: activating power\n");
