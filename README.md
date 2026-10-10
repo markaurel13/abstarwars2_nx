@@ -53,7 +53,7 @@ Because the Tegra X1 CPU in the Nintendo Switch natively supports 32-bit ARM (AA
 
 ## Installation Guide
 
-1. Download the latest release from the [Releases](#https://github.com/markaurel13/abstarwars2_nx/releases) tab:
+1. Download the latest release from the [Releases](https://github.com/markaurel13/abstarwars2_nx/releases) tab:
    - `abstarwars2_nx.nro`
 2. On your Switch SD card, create the following directory:
    ```text
